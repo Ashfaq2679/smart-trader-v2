@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: smart-trader-v2
+
+coinbase:
+  api:
+    base-url: ${COINBASE_API_BASE_URL:https://api.coinbase.com}
+    api-key: ${COINBASE_API_KEY:}
+    api-secret: ${COINBASE_API_SECRET:}
