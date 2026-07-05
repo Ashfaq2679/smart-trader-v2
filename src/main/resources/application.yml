@@ -1,3 +1,5 @@
+server:
+  port: ${SERVER_PORT:7070}
 spring:
   application:
     name: smart-trader-v2
@@ -5,5 +7,5 @@ spring:
 coinbase:
   api:
     base-url: ${COINBASE_API_BASE_URL:https://api.coinbase.com}
-    api-key: ${COINBASE_API_KEY:}
+    bearer-token: ${COINBASE_BEARER_TOKEN:}
     api-secret: ${COINBASE_API_SECRET:}

@@ -17,10 +17,11 @@ class CoinbaseClientImpl implements CoinbaseClient {
 
     @Override
     public List<Candle> getCandles(String productId, Granularity granularity) {
+    	System.out.println("CoinbaseClientImpl-getCandles productId=" + productId + " granularity=" + granularity);
         long start = System.nanoTime();
         List<Candle> candles = webClient.get()
                 .uri(uriBuilder -> uriBuilder
-                        .path("/api/v3/brokerage/products/{productId}/candles")
+                        .path("/api/v3/brokerage/market/products/{productId}/candles")
                         .queryParam("granularity", granularity.apiValue())
                         .build(productId))
                 .retrieve()
@@ -32,6 +33,7 @@ class CoinbaseClientImpl implements CoinbaseClient {
                 productId, granularity, candles == null ? 0 : candles.size(),
                 (System.nanoTime() - start) / 1_000_000);
 
+        System.out.println("CoinbaseClientImpl-CANDLES: " + candles);
         return candles == null ? List.of() : candles;
     }
 
@@ -39,6 +41,7 @@ class CoinbaseClientImpl implements CoinbaseClient {
         if (response == null || response.candles() == null) {
             return List.of();
         }
+        System.out.println("CoinbaseClientImpl-RAW-CANDLES: " + response.candles());
         return response.candles().stream()
                 .map(raw -> Candle.builder()
                         .timestamp(Instant.ofEpochSecond(Long.parseLong(raw.get("start"))))
@@ -54,3 +57,4 @@ class CoinbaseClientImpl implements CoinbaseClient {
     private record CandleResponse(List<Map<String, String>> candles) {
     }
 }
+
