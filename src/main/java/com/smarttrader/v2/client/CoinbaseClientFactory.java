@@ -20,8 +20,8 @@ public class CoinbaseClientFactory {
 
     public CoinbaseClient create() {
         WebClient.Builder builder = webClientBuilder.baseUrl(properties.baseUrl());
-        if (properties.apiKey() != null && !properties.apiKey().isBlank()) {
-            builder = builder.defaultHeader("CB-ACCESS-KEY", properties.apiKey());
+        if (properties.bearerToken() != null && !properties.bearerToken().isBlank()) {
+            builder = builder.defaultHeader("Authorization", "Bearer " + properties.bearerToken());
         }
         return new CoinbaseClientImpl(builder.build());
     }

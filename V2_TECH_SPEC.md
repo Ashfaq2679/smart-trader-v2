@@ -18,6 +18,7 @@ Defines exact implementation rules for SmartTrader V2. No ambiguity allowed.
 - strongCandle (body/range >= 0.6)
 - recentBreakout
 - isAboveEMA
+- consolidationRangePercent
 
 ---
 
