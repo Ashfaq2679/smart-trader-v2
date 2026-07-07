@@ -62,6 +62,13 @@ public final class TradingConstants {
         return Duration.ofMillis((long) (baseWindow.toMillis() * factor));
     }
 
+    /**
+     * Order execution realism (v1.1 section 6): cancel an order if the quoted price has
+     * moved more than this fraction away from the signal's entry price. The spec doesn't
+     * give an exact number, so 0.5% is used as a conservative default for crypto majors.
+     */
+    public static final double SLIPPAGE_TOLERANCE = 0.005;
+
     private TradingConstants() {
     }
 }

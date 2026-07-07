@@ -95,12 +95,38 @@ class ProductServiceIntegrationTest {
 
     @Test
     void edgeCase_emptyCandlesArrayReturnsEmptyList() {
+        // Distinct productId: the candle cache is a shared Spring singleton across test
+        // methods in this class, so reusing "BTC-USD" (warmed by the all-granularities
+        // test above) would trigger an incremental fetch here instead of a cold one.
         mockWebServer.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"candles\":[]}"));
 
-        List<Candle> candles = productService.getLiveCandles("BTC-USD", Granularity.FIVE_MINUTE);
+        List<Candle> candles = productService.getLiveCandles("XRP-USD", Granularity.FIVE_MINUTE);
 
         assertThat(candles).isEmpty();
+    }
+
+    @Test
+    void secondCallForSameProductFetchesOnlyCandlesSinceTheLastCachedTimestamp() throws InterruptedException {
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody(candleResponseJson("1700000000")));
+
+        List<Candle> firstResult = productService.getLiveCandles("SOL-USD", Granularity.ONE_HOUR);
+        assertThat(firstResult).hasSize(1);
+
+        RecordedRequest firstRequest = mockWebServer.takeRequest();
+        assertThat(firstRequest.getPath()).doesNotContain("start=");
+
+        mockWebServer.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody(candleResponseJson("1700003600")));
+
+        List<Candle> secondResult = productService.getLiveCandles("SOL-USD", Granularity.ONE_HOUR);
+        assertThat(secondResult).hasSize(2);
+
+        RecordedRequest secondRequest = mockWebServer.takeRequest();
+        assertThat(secondRequest.getPath()).contains("start=1700000001");
     }
 }

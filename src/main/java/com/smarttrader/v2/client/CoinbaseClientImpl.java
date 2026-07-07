@@ -6,7 +6,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.UriBuilder;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.List;
 
@@ -24,22 +26,38 @@ public class CoinbaseClientImpl implements CoinbaseClient {
 
     @Override
     public List<Candle> getCandles(String productId, Granularity granularity) {
-        long start = System.nanoTime();
+        return fetch(productId, granularity, null);
+    }
+
+    @Override
+    public List<Candle> getCandles(String productId, Granularity granularity, Instant start) {
+        return fetch(productId, granularity, start);
+    }
+
+    private List<Candle> fetch(String productId, Granularity granularity, Instant start) {
+        long began = System.nanoTime();
         List<Candle> candles = webClient.get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/api/v3/brokerage/market/products/{productId}/candles")
-                        .queryParam("granularity", granularity.apiValue())
-                        .build(productId))
+                .uri(uriBuilder -> buildUri(uriBuilder, productId, granularity, start))
                 .retrieve()
                 .bodyToMono(GetProductCandlesResponse.class)
                 .map(CoinbaseClientImpl::toCandles)
                 .block();
 
-        log.info("coinbaseClient productId={} granularity={} candles={} executionTimeMs={}",
-                productId, granularity, candles == null ? 0 : candles.size(),
-                (System.nanoTime() - start) / 1_000_000);
+        log.info("coinbaseClient productId={} granularity={} start={} candles={} executionTimeMs={}",
+                productId, granularity, start, candles == null ? 0 : candles.size(),
+                (System.nanoTime() - began) / 1_000_000);
 
         return candles == null ? List.of() : candles;
+    }
+
+    private static URI buildUri(UriBuilder uriBuilder, String productId, Granularity granularity, Instant start) {
+        uriBuilder.path("/api/v3/brokerage/market/products/{productId}/candles")
+                .queryParam("granularity", granularity.apiValue());
+        if (start != null) {
+            uriBuilder.queryParam("start", start.getEpochSecond())
+                    .queryParam("end", Instant.now().getEpochSecond());
+        }
+        return uriBuilder.build(productId);
     }
 
     private static List<Candle> toCandles(GetProductCandlesResponse response) {
@@ -58,4 +76,3 @@ public class CoinbaseClientImpl implements CoinbaseClient {
                 .toList();
     }
 }
-
