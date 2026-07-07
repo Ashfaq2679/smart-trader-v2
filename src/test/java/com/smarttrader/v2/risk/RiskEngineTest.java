@@ -26,50 +26,68 @@ class RiskEngineTest {
         riskEngine = new RiskEngine(positionSizing);
     }
 
-    private SignalResult signal(boolean valid, double riskReward, double entry, double stop) {
+    private SignalResult signal(boolean valid, double entry, double stop, double target) {
         return SignalResult.builder()
                 .valid(valid)
                 .strategyName("TestStrategy")
                 .direction(TradeDirection.LONG)
                 .entry(entry)
                 .stop(stop)
-                .target(entry + 10)
-                .riskReward(riskReward)
+                .target(target)
                 .build();
     }
 
     @Test
-    void bullish_approvesTradeMeetingMinimumRiskReward() {
+    void bullish_approvesTradeMeetingMinimumEffectiveRiskReward() {
         when(positionSizing.calculate(10_000, 0.01, 100.0, 95.0)).thenReturn(20.0);
 
-        TradeDecision decision = riskEngine.evaluate(MarketRegime.PULLBACK, signal(true, 2.5, 100.0, 95.0), 10_000);
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.PULLBACK, signal(true, 100.0, 95.0, 112.0), 10_000);
 
         assertThat(decision.approved()).isTrue();
         assertThat(decision.positionSize()).isEqualTo(20.0);
+        assertThat(decision.effectiveRiskReward()).isEqualTo(12.0 / 5.0);
     }
 
     @Test
     void bearish_rejectsInvalidSignalFromStrategy() {
-        TradeDecision decision = riskEngine.evaluate(MarketRegime.BREAKOUT, signal(false, 3.0, 100.0, 95.0), 10_000);
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.BREAKOUT, signal(false, 100.0, 95.0, 115.0), 10_000);
 
         assertThat(decision.approved()).isFalse();
     }
 
     @Test
-    void sideways_rejectsWhenRiskRewardBelowMinimum() {
-        TradeDecision decision = riskEngine.evaluate(MarketRegime.CONTINUATION, signal(true, 1.5, 100.0, 95.0), 10_000);
+    void sideways_rejectsWhenEffectiveRiskRewardBelowMinimum() {
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.CONTINUATION, signal(true, 100.0, 95.0, 104.0), 10_000);
 
         assertThat(decision.approved()).isFalse();
         assertThat(decision.reason()).contains("below minimum");
     }
 
     @Test
-    void edgeCase_rejectsWhenPositionSizingReturnsZero() {
-        when(positionSizing.calculate(10_000, 0.01, 100.0, 100.0)).thenReturn(0.0);
+    void edgeCase_rejectsWhenEntryEqualsStopBecauseEffectiveRiskIsZero() {
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.PULLBACK, signal(true, 100.0, 100.0, 130.0), 10_000);
 
-        TradeDecision decision = riskEngine.evaluate(MarketRegime.PULLBACK, signal(true, 3.0, 100.0, 100.0), 10_000);
+        assertThat(decision.approved()).isFalse();
+        assertThat(decision.reason()).contains("below minimum");
+    }
+
+    @Test
+    void edgeCase_rejectsWhenPositionSizingReturnsZeroDespiteGoodRiskReward() {
+        when(positionSizing.calculate(10_000, 0.01, 100.0, 95.0)).thenReturn(0.0);
+
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.PULLBACK, signal(true, 100.0, 95.0, 115.0), 10_000);
 
         assertThat(decision.approved()).isFalse();
         assertThat(decision.reason()).contains("stop distance");
+    }
+
+    @Test
+    void feesAndSlippageReduceEffectiveRiskRewardBelowMinimumEvenWhenRawRatioIsSufficient() {
+        TradeDecision decision = riskEngine.evaluate(MarketRegime.BREAKOUT,
+                signal(true, 100.0, 95.0, 112.0), 10_000, 0.01, 3.0, 2.0, 0.75);
+
+        assertThat(decision.approved()).isFalse();
+        assertThat(decision.reason()).contains("below minimum");
+        assertThat(decision.regimeConfidence()).isEqualTo(0.75);
     }
 }

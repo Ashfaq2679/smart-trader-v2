@@ -1,7 +1,6 @@
 package com.smarttrader.v2.service;
 
 import com.smarttrader.v2.client.CoinbaseClient;
-import com.smarttrader.v2.client.CoinbaseClientFactory;
 import com.smarttrader.v2.client.Granularity;
 import com.smarttrader.v2.model.Candle;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,21 +22,18 @@ import static org.mockito.Mockito.when;
 class ProductServiceTest {
 
     @Mock
-    private CoinbaseClientFactory coinbaseClientFactory;
-
-    @Mock
     private CoinbaseClient coinbaseClient;
 
     private ProductService productService;
 
     @BeforeEach
     void setUp() {
-        productService = new ProductService(coinbaseClientFactory);
+        productService = new ProductService(coinbaseClient);
     }
 
     @Test
     void getAllLiveCandlesFetchesEveryTrackedGranularity() {
-        when(coinbaseClientFactory.create()).thenReturn(coinbaseClient);
+        System.out.println("Running getAllLiveCandlesFetchesEveryTrackedGranularity test...");
         Candle candle = Candle.builder()
                 .timestamp(Instant.now())
                 .open(1).high(2).low(0.5).close(1.5).volume(100)
@@ -52,7 +48,7 @@ class ProductServiceTest {
 
     @Test
     void getLiveCandlesReturnsCandlesForRequestedGranularity() {
-        when(coinbaseClientFactory.create()).thenReturn(coinbaseClient);
+        System.out.println("Running getLiveCandlesReturnsCandlesForRequestedGranularity test...");
         when(coinbaseClient.getCandles("ETH-USD", Granularity.ONE_HOUR)).thenReturn(List.of());
 
         List<Candle> result = productService.getLiveCandles("ETH-USD", Granularity.ONE_HOUR);

@@ -1,5 +1,6 @@
 package com.smarttrader.v2.risk;
 
+import com.smarttrader.v2.calc.RiskRewardCalculator;
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.MarketRegime;
 import com.smarttrader.v2.model.SignalResult;
@@ -9,8 +10,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Applies the risk rules from V2_TECH_SPEC.md section 4:
- * - Minimum R:R = 2.0
+ * Applies the risk rules from V2_TECH_SPEC_v1.1.md section 4 (decision flow step 5,
+ * "Apply Risk Filters"):
+ * - effectiveReward = target - entry - fees - slippage
+ * - effectiveRisk   = entry - stop + fees + slippage
+ * - Minimum R:R = 2.0 (on the effective, cost-adjusted ratio, not the raw signal R:R)
  * - Risk per trade = 1% capital
  * - positionSize = riskCapital / (entry - stop)
  *
@@ -32,34 +36,57 @@ public class RiskEngine {
     }
 
     public TradeDecision evaluate(MarketRegime regime, SignalResult signal, double capital, double riskPercent) {
+        return evaluate(regime, signal, capital, riskPercent,
+                TradingConstants.DEFAULT_FEES, TradingConstants.DEFAULT_SLIPPAGE, 0.0);
+    }
+
+    public TradeDecision evaluate(MarketRegime regime, SignalResult signal, double capital, double riskPercent,
+                                   double fees, double slippage, double regimeConfidence) {
         if (!signal.valid()) {
-            return reject(regime, signal, "strategy produced no valid signal");
+            return reject(regime, regimeConfidence, signal, 0, "strategy produced no valid signal");
         }
-        if (signal.riskReward() < TradingConstants.MIN_RISK_REWARD) {
-            return reject(regime, signal, "risk:reward %.2f below minimum %.2f"
-                    .formatted(signal.riskReward(), TradingConstants.MIN_RISK_REWARD));
+
+        double effectiveRiskReward = RiskRewardCalculator.effectiveRiskReward(
+                signal.direction(), signal.entry(), signal.stop(), signal.target(), fees, slippage);
+        if (effectiveRiskReward < TradingConstants.MIN_RISK_REWARD) {
+            return reject(regime, regimeConfidence, signal, effectiveRiskReward,
+                    "effective risk:reward %.2f below minimum %.2f"
+                            .formatted(effectiveRiskReward, TradingConstants.MIN_RISK_REWARD));
         }
 
         double positionSize = positionSizing.calculate(capital, riskPercent, signal.entry(), signal.stop());
         if (positionSize <= 0) {
-            return reject(regime, signal, "invalid stop distance, cannot size position");
+            return reject(regime, regimeConfidence, signal, effectiveRiskReward,
+                    "invalid stop distance, cannot size position");
         }
 
         TradeDecision decision = TradeDecision.builder()
                 .approved(true)
                 .regime(regime)
+                .regimeConfidence(regimeConfidence)
                 .signal(signal)
+                .effectiveRiskReward(effectiveRiskReward)
                 .positionSize(positionSize)
                 .reason("approved")
                 .build();
 
-        log.info("riskEngine regime={} strategy={} rr={} positionSize={} approved=true",
-                regime, signal.strategyName(), signal.riskReward(), positionSize);
+        log.info("riskEngine regime={} confidence={} strategy={} effectiveRr={} positionSize={} approved=true",
+                regime, regimeConfidence, signal.strategyName(), effectiveRiskReward, positionSize);
         return decision;
     }
 
-    private TradeDecision reject(MarketRegime regime, SignalResult signal, String reason) {
-        log.info("riskEngine regime={} strategy={} approved=false reason={}", regime, signal.strategyName(), reason);
-        return TradeDecision.rejected(regime, signal, reason);
+    private TradeDecision reject(MarketRegime regime, double regimeConfidence, SignalResult signal,
+                                  double effectiveRiskReward, String reason) {
+        log.info("riskEngine regime={} confidence={} strategy={} approved=false reason={}",
+                regime, regimeConfidence, signal.strategyName(), reason);
+        return TradeDecision.builder()
+                .approved(false)
+                .regime(regime)
+                .regimeConfidence(regimeConfidence)
+                .signal(signal)
+                .effectiveRiskReward(effectiveRiskReward)
+                .positionSize(0)
+                .reason(reason)
+                .build();
     }
 }

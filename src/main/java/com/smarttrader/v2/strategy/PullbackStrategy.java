@@ -1,7 +1,9 @@
 package com.smarttrader.v2.strategy;
 
+import com.smarttrader.v2.calc.RiskRewardCalculator;
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.AnalysisContext;
+import com.smarttrader.v2.model.EntryType;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDirection;
 import com.smarttrader.v2.model.TrendDirection;
@@ -9,9 +11,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Pullback Strategy, per V2_TECH_SPEC.md section 3 / SmartTrader_V2_Production_Spec.md section 5.
+ * Pullback Strategy, per V2_TECH_SPEC_v1.1.md sections 1/3 (supersedes V2_TECH_SPEC.md section 3).
  *
- * Entry:  bullishLocation == true (uptrend, price near EMA50 or support)
+ * Entry:  bullishLocation == true (uptrend, price near EMA50 or support), placed as a LIMIT
+ *         order per SmartTrader_V2_Production_Spec.md section 7 ("use limit orders for pullbacks")
  * Stop:   support - ATR * 0.5
  * Target: resistance
  */
@@ -38,6 +41,9 @@ public class PullbackStrategy implements TradingStrategy {
                 .strategyName(NAME)
                 .direction(TradeDirection.LONG)
                 .entry(entry)
+                .entryType(EntryType.LIMIT)
+                .validityWindow(TradingConstants.adjustedValidityWindow(
+                        TradingConstants.PULLBACK_VALIDITY_WINDOW, ctx.atrSpike()))
                 .stop(stop)
                 .target(target)
                 .riskReward(riskReward)

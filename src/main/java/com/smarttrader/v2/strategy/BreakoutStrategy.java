@@ -1,17 +1,21 @@
 package com.smarttrader.v2.strategy;
 
+import com.smarttrader.v2.calc.RiskRewardCalculator;
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.AnalysisContext;
+import com.smarttrader.v2.model.EntryType;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDirection;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Breakout Strategy, per V2_TECH_SPEC.md section 3 / SmartTrader_V2_Production_Spec.md section 5.
+ * Breakout Strategy, per V2_TECH_SPEC_v1.1.md sections 1/3 (supersedes V2_TECH_SPEC.md section 3).
  *
  * Entry:  validBreakoutUp (price > resistance, strongCandle, volumeSpike) for LONG,
- *         or the symmetric breakdown (price < support, strongCandle, volumeSpike) for SHORT.
+ *         or the symmetric breakdown (price < support, strongCandle, volumeSpike) for SHORT,
+ *         placed as a MARKET order per SmartTrader_V2_Production_Spec.md section 7
+ *         ("use market orders for breakouts").
  * Stop:   ATR * BREAKOUT_RISK_ATR (1.2)
  * Target: ATR * BREAKOUT_REWARD_ATR (3.0)
  */
@@ -43,6 +47,9 @@ public class BreakoutStrategy implements TradingStrategy {
                 .strategyName(NAME)
                 .direction(direction)
                 .entry(entry)
+                .entryType(EntryType.MARKET)
+                .validityWindow(TradingConstants.adjustedValidityWindow(
+                        TradingConstants.BREAKOUT_VALIDITY_WINDOW, ctx.atrSpike()))
                 .stop(stop)
                 .target(target)
                 .riskReward(riskReward)

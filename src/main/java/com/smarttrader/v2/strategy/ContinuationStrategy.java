@@ -1,16 +1,21 @@
 package com.smarttrader.v2.strategy;
 
+import com.smarttrader.v2.calc.RiskRewardCalculator;
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.AnalysisContext;
+import com.smarttrader.v2.model.EntryType;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDirection;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Continuation Strategy, per V2_TECH_SPEC.md section 3 / SmartTrader_V2_Production_Spec.md section 5.
+ * Continuation Strategy, per V2_TECH_SPEC_v1.1.md sections 1/3 (supersedes V2_TECH_SPEC.md section 3).
  *
- * Entry:  breakoutContinuation == true (recentBreakout, price holds above EMA, tight consolidation)
+ * Entry:  breakoutContinuation == true (recentBreakout, price holds above EMA, tight consolidation),
+ *         placed as a MARKET order: the spec's execution rules only call out market orders for
+ *         breakouts and limit orders for pullbacks, so continuation (a post-breakout momentum
+ *         entry) follows the breakout convention here — flag if a limit entry is preferred instead.
  * Stop:   the more conservative (lower) of EMA50 or consolidation low
  * Target: ATR extension (no prior measured move is available on AnalysisContext, so we use
  *         entry + ATR * CONTINUATION_TARGET_ATR as the extension target)
@@ -40,6 +45,9 @@ public class ContinuationStrategy implements TradingStrategy {
                 .strategyName(NAME)
                 .direction(TradeDirection.LONG)
                 .entry(entry)
+                .entryType(EntryType.MARKET)
+                .validityWindow(TradingConstants.adjustedValidityWindow(
+                        TradingConstants.CONTINUATION_VALIDITY_WINDOW, ctx.atrSpike()))
                 .stop(stop)
                 .target(target)
                 .riskReward(riskReward)

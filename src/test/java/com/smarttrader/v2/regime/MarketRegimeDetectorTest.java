@@ -3,6 +3,7 @@ package com.smarttrader.v2.regime;
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.MarketRegime;
+import com.smarttrader.v2.model.MarketRegimeResult;
 import com.smarttrader.v2.model.TrendDirection;
 import org.junit.jupiter.api.Test;
 
@@ -42,7 +43,7 @@ class MarketRegimeDetectorTest {
                 .volumeSpike(true)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.BREAKOUT);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.BREAKOUT);
     }
 
     @Test
@@ -53,7 +54,7 @@ class MarketRegimeDetectorTest {
                 .consolidationRangePercent(0.01)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.CONTINUATION);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.CONTINUATION);
     }
 
     @Test
@@ -66,7 +67,7 @@ class MarketRegimeDetectorTest {
                 .atrSpike(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.PULLBACK);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.PULLBACK);
     }
 
     @Test
@@ -80,7 +81,7 @@ class MarketRegimeDetectorTest {
                 .atrSpike(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.PULLBACK);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.PULLBACK);
     }
 
     // --- Bearish scenario ---
@@ -93,7 +94,7 @@ class MarketRegimeDetectorTest {
                 .atrSpike(true)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.PANIC);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.PANIC);
     }
 
     // --- Sideways scenario ---
@@ -110,7 +111,7 @@ class MarketRegimeDetectorTest {
                 .recentBreakout(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.DISTRIBUTION);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.DISTRIBUTION);
     }
 
     // --- Edge cases ---
@@ -128,7 +129,7 @@ class MarketRegimeDetectorTest {
                 .atrSpike(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.BREAKOUT);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.BREAKOUT);
     }
 
     @Test
@@ -140,7 +141,7 @@ class MarketRegimeDetectorTest {
                 .volumeSpike(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.BREAKOUT);
+        assertThat(detector.detect(ctx).regime()).isNotEqualTo(MarketRegime.BREAKOUT);
     }
 
     @Test
@@ -151,7 +152,7 @@ class MarketRegimeDetectorTest {
                 .consolidationRangePercent(TradingConstants.CONTINUATION_CONSOLIDATION_THRESHOLD)
                 .build();
 
-        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.CONTINUATION);
+        assertThat(detector.detect(ctx).regime()).isNotEqualTo(MarketRegime.CONTINUATION);
     }
 
     @Test
@@ -165,7 +166,7 @@ class MarketRegimeDetectorTest {
                 .atrSpike(false)
                 .build();
 
-        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.PULLBACK);
+        assertThat(detector.detect(ctx).regime()).isEqualTo(MarketRegime.PULLBACK);
     }
 
     @Test
@@ -178,6 +179,21 @@ class MarketRegimeDetectorTest {
                 .atrSpike(true)
                 .build();
 
-        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.PULLBACK);
+        assertThat(detector.detect(ctx).regime()).isNotEqualTo(MarketRegime.PULLBACK);
+    }
+
+    @Test
+    void everyDetectionReturnsAConfidenceWithinZeroToOne() {
+        AnalysisContext ctx = base()
+                .price(112.0)
+                .nearestResistance(110.0)
+                .strongCandle(true)
+                .volumeSpike(true)
+                .build();
+
+        MarketRegimeResult result = detector.detect(ctx);
+
+        assertThat(result.regime()).isEqualTo(MarketRegime.BREAKOUT);
+        assertThat(result.confidence()).isBetween(0.0, 1.0);
     }
 }

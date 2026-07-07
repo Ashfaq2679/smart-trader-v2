@@ -1,11 +1,14 @@
 package com.smarttrader.v2.engine;
 
+import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.MarketRegime;
+import com.smarttrader.v2.model.MarketRegimeResult;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.model.TradeDirection;
 import com.smarttrader.v2.regime.MarketRegimeDetector;
+import com.smarttrader.v2.risk.GlobalRiskCheck;
 import com.smarttrader.v2.risk.RiskEngine;
 import com.smarttrader.v2.strategy.StrategySelector;
 import com.smarttrader.v2.strategy.TradingStrategy;
@@ -32,15 +35,22 @@ class TradeEngineTest {
     @Mock
     private TradingStrategy strategy;
 
+    /** Real, no-op instance: GlobalRiskCheck is a pass-through placeholder pending section 8. */
+    private final GlobalRiskCheck globalRiskCheck = new GlobalRiskCheck();
+
     private TradeEngine tradeEngine;
 
     @BeforeEach
     void setUp() {
-        tradeEngine = new TradeEngine(marketRegimeDetector, strategySelector, riskEngine);
+        tradeEngine = new TradeEngine(marketRegimeDetector, strategySelector, riskEngine, globalRiskCheck);
     }
 
     private AnalysisContext anyContext() {
         return AnalysisContext.builder().build();
+    }
+
+    private MarketRegimeResult regimeResult(MarketRegime regime, double confidence) {
+        return MarketRegimeResult.builder().regime(regime).confidence(confidence).build();
     }
 
     @Test
@@ -49,12 +59,14 @@ class TradeEngineTest {
         SignalResult signal = SignalResult.builder().valid(true).strategyName("PullbackStrategy")
                 .direction(TradeDirection.LONG).entry(100).stop(95).target(110).riskReward(2.0).build();
         TradeDecision expected = TradeDecision.builder().approved(true).regime(MarketRegime.PULLBACK)
-                .signal(signal).positionSize(10).reason("approved").build();
+                .regimeConfidence(0.8).signal(signal).positionSize(10).reason("approved").build();
 
-        when(marketRegimeDetector.detect(ctx)).thenReturn(MarketRegime.PULLBACK);
+        when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.PULLBACK, 0.8));
         when(strategySelector.select(MarketRegime.PULLBACK)).thenReturn(Optional.of(strategy));
         when(strategy.evaluate(ctx)).thenReturn(signal);
-        when(riskEngine.evaluate(MarketRegime.PULLBACK, signal, 10_000)).thenReturn(expected);
+        when(riskEngine.evaluate(MarketRegime.PULLBACK, signal, 10_000, RiskEngine.DEFAULT_RISK_PERCENT,
+                TradingConstants.DEFAULT_FEES, TradingConstants.DEFAULT_SLIPPAGE, 0.8))
+                .thenReturn(expected);
 
         TradeDecision decision = tradeEngine.decide(ctx, 10_000);
 
@@ -64,19 +76,20 @@ class TradeEngineTest {
     @Test
     void bearish_panicRegimeIsRejectedWithoutInvokingRiskEngine() {
         AnalysisContext ctx = anyContext();
-        when(marketRegimeDetector.detect(ctx)).thenReturn(MarketRegime.PANIC);
+        when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.PANIC, 0.9));
         when(strategySelector.select(MarketRegime.PANIC)).thenReturn(Optional.empty());
 
         TradeDecision decision = tradeEngine.decide(ctx, 10_000);
 
         assertThat(decision.approved()).isFalse();
         assertThat(decision.regime()).isEqualTo(MarketRegime.PANIC);
+        assertThat(decision.regimeConfidence()).isEqualTo(0.9);
     }
 
     @Test
     void sideways_distributionRegimeIsRejectedWithoutInvokingRiskEngine() {
         AnalysisContext ctx = anyContext();
-        when(marketRegimeDetector.detect(ctx)).thenReturn(MarketRegime.DISTRIBUTION);
+        when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.DISTRIBUTION, 0.3));
         when(strategySelector.select(MarketRegime.DISTRIBUTION)).thenReturn(Optional.empty());
 
         TradeDecision decision = tradeEngine.decide(ctx, 10_000);
@@ -91,10 +104,12 @@ class TradeEngineTest {
         SignalResult invalidSignal = SignalResult.invalid("BreakoutStrategy");
         TradeDecision rejected = TradeDecision.rejected(MarketRegime.BREAKOUT, invalidSignal, "strategy produced no valid signal");
 
-        when(marketRegimeDetector.detect(ctx)).thenReturn(MarketRegime.BREAKOUT);
+        when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.BREAKOUT, 0.7));
         when(strategySelector.select(MarketRegime.BREAKOUT)).thenReturn(Optional.of(strategy));
         when(strategy.evaluate(ctx)).thenReturn(invalidSignal);
-        when(riskEngine.evaluate(MarketRegime.BREAKOUT, invalidSignal, 10_000)).thenReturn(rejected);
+        when(riskEngine.evaluate(MarketRegime.BREAKOUT, invalidSignal, 10_000, RiskEngine.DEFAULT_RISK_PERCENT,
+                TradingConstants.DEFAULT_FEES, TradingConstants.DEFAULT_SLIPPAGE, 0.7))
+                .thenReturn(rejected);
 
         TradeDecision decision = tradeEngine.decide(ctx, 10_000);
 

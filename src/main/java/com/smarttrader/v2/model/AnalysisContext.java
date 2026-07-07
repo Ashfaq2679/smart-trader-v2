@@ -2,17 +2,22 @@ package com.smarttrader.v2.model;
 
 import lombok.Builder;
 
+import java.time.Instant;
+
 /**
  * Immutable snapshot of all data required for regime detection and strategy evaluation.
- * Fields per V2_TECH_SPEC.md section 1 and SmartTrader_V2_Production_Spec.md section 3.
+ * Fields per V2_TECH_SPEC_v1.1.md section 1 (supersedes V2_TECH_SPEC.md section 1).
  *
- * consolidationRangePercent is not explicitly named in AnalysisContext's field list but is
- * required input for continuation detection ("consolidation range < 2%"); it is carried here
- * as a derived field produced by the (not-yet-implemented) context builder.
+ * bidPrice/askPrice/spread and lastCandleCloseTime/dataLatencyMs support execution realism
+ * and data-integrity checks (v1.1 sections 6 and 10); they are not yet consumed by the
+ * regime detector or strategies, which still key off price/candle-derived fields.
  */
 @Builder
 public record AnalysisContext(
         double price,
+        double bidPrice,
+        double askPrice,
+        double spread,
         double ema9,
         double ema21,
         double ema50,
@@ -26,6 +31,8 @@ public record AnalysisContext(
         boolean isAboveEMA,
         boolean recentBreakout,
         boolean atrSpike,
-        double consolidationRangePercent
+        double consolidationRangePercent,
+        Instant lastCandleCloseTime,
+        long dataLatencyMs
 ) {
 }

@@ -1,23 +1,29 @@
 package com.smarttrader.v2.client;
 
+import com.coinbase.advanced.model.products.GetProductCandlesResponse;
 import com.smarttrader.v2.model.Candle;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 
+/**
+ * Read-only client for the public Coinbase candle endpoint. Wired to the
+ * coinbaseWebClient bean from CoinbaseWebClientConfig, distinct from the
+ * per-user authenticated clients CoinbaseClientFactory builds for trading.
+ */
 @Slf4j
+@Component
 @RequiredArgsConstructor
-class CoinbaseClientImpl implements CoinbaseClient {
+public class CoinbaseClientImpl implements CoinbaseClient {
 
     private final WebClient webClient;
 
     @Override
     public List<Candle> getCandles(String productId, Granularity granularity) {
-    	System.out.println("CoinbaseClientImpl-getCandles productId=" + productId + " granularity=" + granularity);
         long start = System.nanoTime();
         List<Candle> candles = webClient.get()
                 .uri(uriBuilder -> uriBuilder
@@ -25,7 +31,7 @@ class CoinbaseClientImpl implements CoinbaseClient {
                         .queryParam("granularity", granularity.apiValue())
                         .build(productId))
                 .retrieve()
-                .bodyToMono(CandleResponse.class)
+                .bodyToMono(GetProductCandlesResponse.class)
                 .map(CoinbaseClientImpl::toCandles)
                 .block();
 
@@ -33,28 +39,23 @@ class CoinbaseClientImpl implements CoinbaseClient {
                 productId, granularity, candles == null ? 0 : candles.size(),
                 (System.nanoTime() - start) / 1_000_000);
 
-        System.out.println("CoinbaseClientImpl-CANDLES: " + candles);
         return candles == null ? List.of() : candles;
     }
 
-    private static List<Candle> toCandles(CandleResponse response) {
-        if (response == null || response.candles() == null) {
+    private static List<Candle> toCandles(GetProductCandlesResponse response) {
+        if (response == null || response.getCandles() == null) {
             return List.of();
         }
-        System.out.println("CoinbaseClientImpl-RAW-CANDLES: " + response.candles());
-        return response.candles().stream()
+        return response.getCandles().stream()
                 .map(raw -> Candle.builder()
-                        .timestamp(Instant.ofEpochSecond(Long.parseLong(raw.get("start"))))
-                        .low(Double.parseDouble(raw.get("low")))
-                        .high(Double.parseDouble(raw.get("high")))
-                        .open(Double.parseDouble(raw.get("open")))
-                        .close(Double.parseDouble(raw.get("close")))
-                        .volume(Double.parseDouble(raw.get("volume")))
+                        .timestamp(Instant.ofEpochSecond(Long.parseLong(raw.getStart())))
+                        .low(Double.parseDouble(raw.getLow()))
+                        .high(Double.parseDouble(raw.getHigh()))
+                        .open(Double.parseDouble(raw.getOpen()))
+                        .close(Double.parseDouble(raw.getClose()))
+                        .volume(Double.parseDouble(raw.getVolume()))
                         .build())
                 .toList();
-    }
-
-    private record CandleResponse(List<Map<String, String>> candles) {
     }
 }
 

@@ -1,5 +1,7 @@
 package com.smarttrader.v2.constants;
 
+import java.time.Duration;
+
 /**
  * Shared numeric constants used by regime detection and strategy evaluation,
  * so the same rule (e.g. "near EMA/support", "consolidation threshold") is
@@ -27,6 +29,38 @@ public final class TradingConstants {
 
     /** Minimum acceptable risk:reward ratio, per spec section 4. */
     public static final double MIN_RISK_REWARD = 2.0;
+
+    /**
+     * Default per-trade fees/slippage used by the effective R:R filter (v1.1 section 4)
+     * when the caller doesn't supply venue-specific values. Zero preserves the raw R:R
+     * behavior until real cost estimates are wired in.
+     */
+    public static final double DEFAULT_FEES = 0.0;
+    public static final double DEFAULT_SLIPPAGE = 0.0;
+
+    /**
+     * How long a strategy's signal remains actionable before it must be re-evaluated
+     * (v1.1 section 3 "validityWindow"). The spec does not give exact durations, so
+     * these follow each strategy's typical holding horizon: breakouts are time-critical,
+     * pullbacks and continuations tolerate a wider entry window.
+     */
+    public static final Duration PULLBACK_VALIDITY_WINDOW = Duration.ofMinutes(15);
+    public static final Duration BREAKOUT_VALIDITY_WINDOW = Duration.ofMinutes(5);
+    public static final Duration CONTINUATION_VALIDITY_WINDOW = Duration.ofMinutes(10);
+
+    /**
+     * Adaptive adjustment per v1.1 section 3.1: on an ATR spike (high volatility)
+     * shrink the validity window since price can invalidate the setup faster;
+     * otherwise (low volatility) extend it slightly since the setup stays actionable longer.
+     */
+    public static final double VALIDITY_HIGH_VOLATILITY_FACTOR = 0.5;
+    public static final double VALIDITY_LOW_VOLATILITY_FACTOR = 1.2;
+
+    /** Applies the section 3.1 adaptive adjustment to a strategy's base validity window. */
+    public static Duration adjustedValidityWindow(Duration baseWindow, boolean atrSpike) {
+        double factor = atrSpike ? VALIDITY_HIGH_VOLATILITY_FACTOR : VALIDITY_LOW_VOLATILITY_FACTOR;
+        return Duration.ofMillis((long) (baseWindow.toMillis() * factor));
+    }
 
     private TradingConstants() {
     }
