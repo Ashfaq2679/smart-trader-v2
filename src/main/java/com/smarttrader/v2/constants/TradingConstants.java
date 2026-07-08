@@ -69,6 +69,12 @@ public final class TradingConstants {
      */
     public static final double SLIPPAGE_TOLERANCE = 0.005;
 
+    /**
+     * Position Service Enhancements (v1.1 section 7): force-exit a position once its
+     * unrealized loss reaches this multiple of the original per-unit risk (|entry - stop|).
+     */
+    public static final double UNREALIZED_LOSS_GUARD_RISK_MULTIPLIER = 1.5;
+
     private TradingConstants() {
     }
 }
