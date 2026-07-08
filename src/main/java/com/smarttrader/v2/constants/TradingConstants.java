@@ -75,6 +75,32 @@ public final class TradingConstants {
      */
     public static final double UNREALIZED_LOSS_GUARD_RISK_MULTIPLIER = 1.5;
 
+    /**
+     * Portfolio Risk Controls (v1.1 section 8). None of these thresholds are given exact
+     * values by the spec; documented assumptions chosen to be conservative defaults:
+     */
+    /** Cap total open notional exposure at this fraction of capital. */
+    public static final double MAX_PORTFOLIO_EXPOSURE_PERCENT = 0.20;
+    /** Rolling window size (number of returns) used to compute correlation between products. */
+    public static final int CORRELATION_WINDOW_SIZE = 30;
+    /** Minimum overlapping return samples required before a correlation is considered reliable. */
+    public static final int CORRELATION_MIN_SAMPLES = 5;
+    /** Absolute correlation above which two products are treated as concentrated risk. */
+    public static final double CORRELATION_THRESHOLD = 0.7;
+    /** Multiplicative size reduction applied per highly-correlated open position. */
+    public static final double CORRELATION_SIZE_REDUCTION_FACTOR = 0.5;
+    /** Floor so correlation adjustment never reduces size to (near) zero outright. */
+    public static final double MIN_CORRELATION_MULTIPLIER = 0.25;
+
+    /**
+     * Data Integrity (v1.1 section 10). Exact thresholds aren't given by the spec;
+     * documented assumptions:
+     */
+    /** Reject an AnalysisContext whose dataLatencyMs exceeds this. */
+    public static final long MAX_DATA_LATENCY_MS = 5_000;
+    /** Flag a candle-to-candle open/close move larger than this fraction as a price gap. */
+    public static final double MAX_PRICE_GAP_PERCENT = 0.10;
+
     private TradingConstants() {
     }
 }

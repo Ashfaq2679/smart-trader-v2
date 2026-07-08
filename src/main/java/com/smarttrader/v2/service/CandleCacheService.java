@@ -3,6 +3,8 @@ package com.smarttrader.v2.service;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.smarttrader.v2.client.CoinbaseClient;
 import com.smarttrader.v2.client.Granularity;
+import com.smarttrader.v2.event.CandleUpdatedEvent;
+import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.model.Candle;
 import com.smarttrader.v2.model.CandleCacheKey;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +21,8 @@ import java.util.Map;
  * Keeps a growing, cached candle series per (productId, granularity) and only fetches
  * the delta from Coinbase since the last cached candle's timestamp, instead of
  * re-fetching the full range on every call.
+ *
+ * Publishes a CandleUpdatedEvent (section 9) for every newly-seen candle.
  */
 @Slf4j
 @Service
@@ -27,6 +31,7 @@ public class CandleCacheService {
 
     private final CoinbaseClient coinbaseClient;
     private final Cache<CandleCacheKey, List<Candle>> candleCache;
+    private final DomainEventPublisher eventPublisher;
 
     public List<Candle> getCandles(String productId, Granularity granularity) {
         CandleCacheKey key = new CandleCacheKey(productId, granularity);
@@ -37,6 +42,7 @@ public class CandleCacheService {
         if (cached == null || cached.isEmpty()) {
             List<Candle> fetched = sortedCopy(coinbaseClient.getCandles(productId, granularity));
             log.info("candleCache productId={} granularity={} coldFetch candles={}", productId, granularity, fetched.size());
+            publishCandleUpdated(productId, granularity, fetched);
             return fetched;
         }
 
@@ -45,7 +51,12 @@ public class CandleCacheService {
         List<Candle> merged = merge(cached, fresh);
         log.info("candleCache productId={} granularity={} since={} newCandles={} total={}",
                 productId, granularity, lastTimestamp, fresh.size(), merged.size());
+        publishCandleUpdated(productId, granularity, fresh);
         return merged;
+    }
+
+    private void publishCandleUpdated(String productId, Granularity granularity, List<Candle> newCandles) {
+        newCandles.forEach(candle -> eventPublisher.publish(CandleUpdatedEvent.of(productId, granularity, candle)));
     }
 
     private static List<Candle> sortedCopy(List<Candle> candles) {

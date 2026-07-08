@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.smarttrader.v2.client.CoinbaseClient;
 import com.smarttrader.v2.client.Granularity;
+import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.model.Candle;
 import com.smarttrader.v2.model.CandleCacheKey;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +29,8 @@ class CandleCacheServiceTest {
 
     @Mock
     private CoinbaseClient coinbaseClient;
+    @Mock
+    private DomainEventPublisher eventPublisher;
 
     private Cache<CandleCacheKey, List<Candle>> candleCache;
     private CandleCacheService candleCacheService;
@@ -35,7 +38,7 @@ class CandleCacheServiceTest {
     @BeforeEach
     void setUp() {
         candleCache = Caffeine.newBuilder().build();
-        candleCacheService = new CandleCacheService(coinbaseClient, candleCache);
+        candleCacheService = new CandleCacheService(coinbaseClient, candleCache, eventPublisher);
     }
 
     private Candle candleAt(long epochSecond, double close) {

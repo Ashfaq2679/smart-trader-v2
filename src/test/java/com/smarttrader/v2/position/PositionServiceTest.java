@@ -1,5 +1,6 @@
 package com.smarttrader.v2.position;
 
+import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.model.EntryType;
 import com.smarttrader.v2.model.MarketRegime;
 import com.smarttrader.v2.model.SignalResult;
@@ -7,6 +8,9 @@ import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.model.TradeDirection;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -14,14 +18,18 @@ import java.time.Instant;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@ExtendWith(MockitoExtension.class)
 class PositionServiceTest {
+
+    @Mock
+    private DomainEventPublisher eventPublisher;
 
     private PositionService positionService;
     private final Instant now = Instant.parse("2026-01-01T00:00:00Z");
 
     @BeforeEach
     void setUp() {
-        positionService = new PositionService();
+        positionService = new PositionService(eventPublisher);
     }
 
     private TradeDecision approvedDecision(TradeDirection direction, double entry, double stop, double target, double size) {

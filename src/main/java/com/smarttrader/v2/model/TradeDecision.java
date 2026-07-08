@@ -11,7 +11,7 @@ import lombok.Builder;
  * effectiveRiskReward is the fee/slippage-adjusted R:R (section 4) that RiskEngine
  * actually filtered on, as opposed to signal.riskReward() which is the strategy's raw value.
  */
-@Builder
+@Builder(toBuilder = true)
 public record TradeDecision(
         boolean approved,
         MarketRegime regime,

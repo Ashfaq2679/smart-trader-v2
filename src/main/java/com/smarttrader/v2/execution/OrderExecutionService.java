@@ -1,6 +1,8 @@
 package com.smarttrader.v2.execution;
 
 import com.smarttrader.v2.constants.TradingConstants;
+import com.smarttrader.v2.event.DomainEventPublisher;
+import com.smarttrader.v2.event.OrderPlacedEvent;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDecision;
 import lombok.RequiredArgsConstructor;
@@ -9,6 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Order Execution Realism, per V2_TECH_SPEC_v1.1.md section 6:
@@ -22,6 +25,8 @@ import java.util.Optional;
  * already-approved TradeDecision from RiskEngine/GlobalRiskCheck and decides whether the
  * order can actually be placed against current market conditions. Submitting the order to
  * the exchange itself (the authenticated Coinbase call) is out of scope here.
+ *
+ * Publishes OrderPlacedEvent (section 9) for every outcome (PLACED/REJECTED/CANCELLED/EXPIRED).
  */
 @Slf4j
 @Component
@@ -29,6 +34,18 @@ import java.util.Optional;
 public class OrderExecutionService {
 
     private final IdempotencyKeyStore idempotencyKeyStore;
+    private final DomainEventPublisher eventPublisher;
+
+    /**
+     * Convenience overload: generates a fresh correlationId. Prefer the overload that
+     * accepts one explicitly when this order is part of a larger flow (e.g. following a
+     * TradeEngine.decide() call) so events can be correlated end-to-end.
+     */
+    public OrderResult place(TradeDecision decision, String productId, double currentQuotePrice,
+                              Instant signalGeneratedAt, Instant now, String idempotencyKey) {
+        return place(decision, productId, currentQuotePrice, signalGeneratedAt, now, idempotencyKey,
+                UUID.randomUUID().toString());
+    }
 
     /**
      * @param decision           the approved (or rejected) trade decision to execute
@@ -38,9 +55,11 @@ public class OrderExecutionService {
      * @param now                current time, used to enforce the order timeout
      * @param idempotencyKey     unique key for this submission attempt; required, retries with
      *                           the same key return the original result instead of re-executing
+     * @param correlationId      ties the resulting OrderPlacedEvent back to the originating
+     *                           trade decision (and downstream position events)
      */
     public OrderResult place(TradeDecision decision, String productId, double currentQuotePrice,
-                              Instant signalGeneratedAt, Instant now, String idempotencyKey) {
+                              Instant signalGeneratedAt, Instant now, String idempotencyKey, String correlationId) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new IllegalArgumentException("idempotencyKey is required");
         }
@@ -54,6 +73,7 @@ public class OrderExecutionService {
 
         OrderResult result = evaluate(decision, productId, currentQuotePrice, signalGeneratedAt, now, idempotencyKey);
         idempotencyKeyStore.save(idempotencyKey, result);
+        eventPublisher.publish(OrderPlacedEvent.of(correlationId, result));
 
         log.info("orderExecution idempotencyKey={} productId={} status={} slippage={} reason={}",
                 idempotencyKey, productId, result.status(), result.slippage(), result.reason());

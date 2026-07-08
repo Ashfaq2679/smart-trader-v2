@@ -1,5 +1,6 @@
 package com.smarttrader.v2.execution;
 
+import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.model.EntryType;
 import com.smarttrader.v2.model.MarketRegime;
 import com.smarttrader.v2.model.SignalResult;
@@ -29,12 +30,14 @@ class OrderExecutionServiceTest {
 
     @Mock
     private IdempotencyKeyStore idempotencyKeyStore;
+    @Mock
+    private DomainEventPublisher eventPublisher;
 
     private OrderExecutionService orderExecutionService;
 
     @BeforeEach
     void setUp() {
-        orderExecutionService = new OrderExecutionService(idempotencyKeyStore);
+        orderExecutionService = new OrderExecutionService(idempotencyKeyStore, eventPublisher);
     }
 
     private TradeDecision approvedDecision(double entry, Duration validityWindow) {

@@ -1,6 +1,10 @@
 package com.smarttrader.v2.engine;
 
 import com.smarttrader.v2.constants.TradingConstants;
+import com.smarttrader.v2.event.DomainEventPublisher;
+import com.smarttrader.v2.integrity.DataIntegrityException;
+import com.smarttrader.v2.integrity.DataIntegrityValidator;
+import com.smarttrader.v2.integrity.DataIntegrityViolationType;
 import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.MarketRegime;
 import com.smarttrader.v2.model.MarketRegimeResult;
@@ -21,6 +25,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -33,16 +41,23 @@ class TradeEngineTest {
     @Mock
     private RiskEngine riskEngine;
     @Mock
+    private GlobalRiskCheck globalRiskCheck;
+    @Mock
+    private DataIntegrityValidator dataIntegrityValidator;
+    @Mock
+    private DomainEventPublisher eventPublisher;
+    @Mock
     private TradingStrategy strategy;
-
-    /** Real, no-op instance: GlobalRiskCheck is a pass-through placeholder pending section 8. */
-    private final GlobalRiskCheck globalRiskCheck = new GlobalRiskCheck();
 
     private TradeEngine tradeEngine;
 
+    private static final String PRODUCT_ID = "BTC-USD";
+    private static final double CAPITAL = 10_000;
+
     @BeforeEach
     void setUp() {
-        tradeEngine = new TradeEngine(marketRegimeDetector, strategySelector, riskEngine, globalRiskCheck);
+        tradeEngine = new TradeEngine(marketRegimeDetector, strategySelector, riskEngine, globalRiskCheck,
+                dataIntegrityValidator, eventPublisher);
     }
 
     private AnalysisContext anyContext() {
@@ -51,6 +66,11 @@ class TradeEngineTest {
 
     private MarketRegimeResult regimeResult(MarketRegime regime, double confidence) {
         return MarketRegimeResult.builder().regime(regime).confidence(confidence).build();
+    }
+
+    private void stubGlobalRiskCheckPassThrough() {
+        when(globalRiskCheck.apply(any(), eq(PRODUCT_ID), eq(CAPITAL), any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test
@@ -64,11 +84,12 @@ class TradeEngineTest {
         when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.PULLBACK, 0.8));
         when(strategySelector.select(MarketRegime.PULLBACK)).thenReturn(Optional.of(strategy));
         when(strategy.evaluate(ctx)).thenReturn(signal);
-        when(riskEngine.evaluate(MarketRegime.PULLBACK, signal, 10_000, RiskEngine.DEFAULT_RISK_PERCENT,
+        when(riskEngine.evaluate(MarketRegime.PULLBACK, signal, CAPITAL, RiskEngine.DEFAULT_RISK_PERCENT,
                 TradingConstants.DEFAULT_FEES, TradingConstants.DEFAULT_SLIPPAGE, 0.8))
                 .thenReturn(expected);
+        stubGlobalRiskCheckPassThrough();
 
-        TradeDecision decision = tradeEngine.decide(ctx, 10_000);
+        TradeDecision decision = tradeEngine.decide(ctx, PRODUCT_ID, CAPITAL);
 
         assertThat(decision).isEqualTo(expected);
     }
@@ -78,8 +99,9 @@ class TradeEngineTest {
         AnalysisContext ctx = anyContext();
         when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.PANIC, 0.9));
         when(strategySelector.select(MarketRegime.PANIC)).thenReturn(Optional.empty());
+        stubGlobalRiskCheckPassThrough();
 
-        TradeDecision decision = tradeEngine.decide(ctx, 10_000);
+        TradeDecision decision = tradeEngine.decide(ctx, PRODUCT_ID, CAPITAL);
 
         assertThat(decision.approved()).isFalse();
         assertThat(decision.regime()).isEqualTo(MarketRegime.PANIC);
@@ -91,8 +113,9 @@ class TradeEngineTest {
         AnalysisContext ctx = anyContext();
         when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.DISTRIBUTION, 0.3));
         when(strategySelector.select(MarketRegime.DISTRIBUTION)).thenReturn(Optional.empty());
+        stubGlobalRiskCheckPassThrough();
 
-        TradeDecision decision = tradeEngine.decide(ctx, 10_000);
+        TradeDecision decision = tradeEngine.decide(ctx, PRODUCT_ID, CAPITAL);
 
         assertThat(decision.approved()).isFalse();
         assertThat(decision.regime()).isEqualTo(MarketRegime.DISTRIBUTION);
@@ -107,12 +130,25 @@ class TradeEngineTest {
         when(marketRegimeDetector.detect(ctx)).thenReturn(regimeResult(MarketRegime.BREAKOUT, 0.7));
         when(strategySelector.select(MarketRegime.BREAKOUT)).thenReturn(Optional.of(strategy));
         when(strategy.evaluate(ctx)).thenReturn(invalidSignal);
-        when(riskEngine.evaluate(MarketRegime.BREAKOUT, invalidSignal, 10_000, RiskEngine.DEFAULT_RISK_PERCENT,
+        when(riskEngine.evaluate(MarketRegime.BREAKOUT, invalidSignal, CAPITAL, RiskEngine.DEFAULT_RISK_PERCENT,
                 TradingConstants.DEFAULT_FEES, TradingConstants.DEFAULT_SLIPPAGE, 0.7))
                 .thenReturn(rejected);
+        stubGlobalRiskCheckPassThrough();
 
-        TradeDecision decision = tradeEngine.decide(ctx, 10_000);
+        TradeDecision decision = tradeEngine.decide(ctx, PRODUCT_ID, CAPITAL);
 
         assertThat(decision.approved()).isFalse();
+    }
+
+    @Test
+    void edgeCase_staleDataIsRejectedBeforeAnyRegimeDetectionRuns() {
+        AnalysisContext ctx = anyContext();
+        org.mockito.Mockito.doThrow(new DataIntegrityException(DataIntegrityViolationType.STALE_DATA, "too stale"))
+                .when(dataIntegrityValidator).rejectStaleData(ctx);
+
+        assertThatThrownBy(() -> tradeEngine.decide(ctx, PRODUCT_ID, CAPITAL))
+                .isInstanceOf(DataIntegrityException.class);
+
+        verifyNoInteractions(marketRegimeDetector, strategySelector, riskEngine, globalRiskCheck);
     }
 }
