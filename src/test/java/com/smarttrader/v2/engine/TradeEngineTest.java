@@ -22,6 +22,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,11 +56,12 @@ class TradeEngineTest {
 
     private static final String PRODUCT_ID = "BTC-USD";
     private static final double CAPITAL = 10_000;
+    private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
 
     @BeforeEach
     void setUp() {
         tradeEngine = new TradeEngine(marketRegimeDetector, strategySelector, riskEngine, globalRiskCheck,
-                dataIntegrityValidator, eventPublisher);
+                dataIntegrityValidator, eventPublisher, FIXED_CLOCK);
     }
 
     private AnalysisContext anyContext() {
@@ -69,7 +73,7 @@ class TradeEngineTest {
     }
 
     private void stubGlobalRiskCheckPassThrough() {
-        when(globalRiskCheck.apply(any(), eq(PRODUCT_ID), eq(CAPITAL), any(), any()))
+        when(globalRiskCheck.apply(any(), eq(PRODUCT_ID), eq(CAPITAL), any(), eq(Instant.now(FIXED_CLOCK))))
                 .thenAnswer(invocation -> invocation.getArgument(0));
     }
 

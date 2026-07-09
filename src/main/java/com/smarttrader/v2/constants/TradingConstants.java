@@ -94,12 +94,25 @@ public final class TradingConstants {
 
     /**
      * Data Integrity (v1.1 section 10). Exact thresholds aren't given by the spec;
-     * documented assumptions:
+     * documented assumptions. MAX_DATA_LATENCY_MS is deliberately generous (5 minutes,
+     * not seconds): dataLatencyMs is derived from candle close time, and even a fresh
+     * 1-hour candle can legitimately be tens of seconds to a few minutes old by the time
+     * it's fetched and processed - this should catch a genuinely stalled feed, not normal
+     * candle-based polling latency.
      */
-    /** Reject an AnalysisContext whose dataLatencyMs exceeds this. */
-    public static final long MAX_DATA_LATENCY_MS = 5_000;
+    public static final long MAX_DATA_LATENCY_MS = 300_000;
     /** Flag a candle-to-candle open/close move larger than this fraction as a price gap. */
     public static final double MAX_PRICE_GAP_PERCENT = 0.10;
+
+    /** volumeSpike lookback/multiplier, per V2_TECH_SPEC_v1.1.md section 1: "volumeSpike (20, 1.8)". */
+    public static final int VOLUME_SPIKE_LOOKBACK = 20;
+    public static final double VOLUME_SPIKE_MULTIPLIER = 1.8;
+
+    /** strongCandle threshold, per V2_TECH_SPEC_v1.1.md section 1: "body/range >= 0.6". */
+    public static final double STRONG_CANDLE_BODY_RATIO = 0.6;
+
+    /** atrSpike isn't given a threshold by the spec; current true range vs this multiple of ATR. */
+    public static final double ATR_SPIKE_MULTIPLIER = 1.5;
 
     private TradingConstants() {
     }

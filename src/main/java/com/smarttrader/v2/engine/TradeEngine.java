@@ -1,5 +1,11 @@
 package com.smarttrader.v2.engine;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.util.UUID;
+
+import org.springframework.stereotype.Component;
+
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.event.RegimeDetectedEvent;
@@ -15,12 +21,10 @@ import com.smarttrader.v2.risk.GlobalRiskCheck;
 import com.smarttrader.v2.risk.RiskEngine;
 import com.smarttrader.v2.strategy.StrategySelector;
 import com.smarttrader.v2.strategy.TradingStrategy;
+
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.time.Instant;
-import java.util.UUID;
 
 /**
  * Orchestrates the full decision flow, per V2_TECH_SPEC_v1.1.md section 5:
@@ -52,6 +56,13 @@ public class TradeEngine {
     private final GlobalRiskCheck globalRiskCheck;
     private final DataIntegrityValidator dataIntegrityValidator;
     private final DomainEventPublisher eventPublisher;
+    private final Clock clock;
+    
+    @PostConstruct
+    public void init() {
+		log.info("TradeEngine initialized with MarketRegimeDetector: {}, StrategySelector: {}, RiskEngine: {}, GlobalRiskCheck: {}, DataIntegrityValidator: {}, DomainEventPublisher: {}",
+				marketRegimeDetector.getClass().getSimpleName(), strategySelector.getClass().getSimpleName(), riskEngine.getClass().getSimpleName(),	 globalRiskCheck.getClass().getSimpleName(), dataIntegrityValidator.getClass().getSimpleName(), eventPublisher.getClass().getSimpleName());
+	}
 
     public TradeDecision decide(AnalysisContext ctx, String productId, double capital) {
         return decide(ctx, productId, capital, RiskEngine.DEFAULT_RISK_PERCENT,
@@ -75,7 +86,7 @@ public class TradeEngine {
                 .map(strategy -> evaluateAndFilter(regimeResult, strategy, ctx, productId, capital, riskPercent, fees, slippage, correlationId))
                 .orElseGet(() -> noStrategyDecision(regimeResult));
 
-        TradeDecision finalDecision = globalRiskCheck.apply(decision, productId, capital, correlationId, Instant.now());
+        TradeDecision finalDecision = globalRiskCheck.apply(decision, productId, capital, correlationId, Instant.now(clock));
         log.info("tradeEngine correlationId={} regime={} confidence={} approved={}",
                 correlationId, regime, regimeResult.confidence(), finalDecision.approved());
         return finalDecision;

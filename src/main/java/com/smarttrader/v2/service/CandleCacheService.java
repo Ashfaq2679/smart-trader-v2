@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -63,13 +64,31 @@ public class CandleCacheService {
         return candles.stream().sorted(Comparator.comparing(Candle::timestamp)).toList();
     }
 
+    /**
+     * cached is already sorted ascending (invariant maintained by this class), and grows
+     * without bound over time, so this must not re-sort the whole thing on every call
+     * (section 13: "no redundant recalculation"). fresh is fetched from lastTimestamp+1,
+     * so it's normally strictly newer than everything in cached: just append it. Only
+     * fall back to a full dedup-merge in the rare case where the boundary candle overlaps
+     * (e.g. it was still forming and came back updated).
+     */
     private static List<Candle> merge(List<Candle> cached, List<Candle> fresh) {
         if (fresh.isEmpty()) {
             return cached;
         }
+        List<Candle> sortedFresh = sortedCopy(fresh);
+        Instant cachedLastTimestamp = cached.get(cached.size() - 1).timestamp();
+
+        if (sortedFresh.get(0).timestamp().isAfter(cachedLastTimestamp)) {
+            List<Candle> appended = new ArrayList<>(cached.size() + sortedFresh.size());
+            appended.addAll(cached);
+            appended.addAll(sortedFresh);
+            return List.copyOf(appended);
+        }
+
         Map<Instant, Candle> byTimestamp = new LinkedHashMap<>();
         cached.forEach(candle -> byTimestamp.put(candle.timestamp(), candle));
-        fresh.forEach(candle -> byTimestamp.put(candle.timestamp(), candle));
+        sortedFresh.forEach(candle -> byTimestamp.put(candle.timestamp(), candle));
         return byTimestamp.values().stream().sorted(Comparator.comparing(Candle::timestamp)).toList();
     }
 }

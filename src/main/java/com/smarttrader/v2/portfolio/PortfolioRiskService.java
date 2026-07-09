@@ -1,5 +1,14 @@
 package com.smarttrader.v2.portfolio;
 
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Component;
+
 import com.smarttrader.v2.constants.TradingConstants;
 import com.smarttrader.v2.event.DomainEventPublisher;
 import com.smarttrader.v2.event.PortfolioUpdatedEvent;
@@ -7,16 +16,10 @@ import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.position.Position;
 import com.smarttrader.v2.position.PositionService;
 import com.smarttrader.v2.position.PositionStatus;
+
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.time.Instant;
-import java.util.Collection;
-import java.util.List;
-import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Portfolio Risk Controls, per V2_TECH_SPEC_v1.1.md section 8:
@@ -37,6 +40,12 @@ public class PortfolioRiskService {
     private final PositionService positionService;
     private final CorrelationTracker correlationTracker;
     private final DomainEventPublisher eventPublisher;
+    
+    @PostConstruct
+    public void init() {
+		log.info("PortfolioRiskService initialized with PositionService: {} and CorrelationTracker: {}",
+				positionService.getClass().getSimpleName(), correlationTracker.getClass().getSimpleName());
+    }
 
     public TradeDecision apply(TradeDecision decision, String productId, double capital, String correlationId, Instant now) {
         List<Position> openPositions = openPositions();

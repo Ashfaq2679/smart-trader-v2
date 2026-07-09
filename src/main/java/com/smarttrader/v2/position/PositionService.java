@@ -7,12 +7,15 @@ import com.smarttrader.v2.event.PositionClosedEvent;
 import com.smarttrader.v2.event.PositionOpenedEvent;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDecision;
+import com.smarttrader.v2.model.TradeDirection;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,12 +27,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * - Partial fills supported
  * - State transitions enforced
  *
- * Also publishes the section 9 lifecycle events (PositionOpened, OrderFilled, PositionClosed).
- *
- * In-memory only: like OrderExecutionService's IdempotencyKeyStore, a durable
- * (MongoDB-backed) store belongs to the "positions" collection named in CLAUDE.md but
- * isn't implemented yet. This keeps the position lifecycle rules testable independent
- * of persistence.
+ * Also publishes the section 9 lifecycle events (PositionOpened, OrderFilled, PositionClosed),
+ * and persists to MongoDB so positions can be rebuilt after a restart (section 11 "Recovery
+ * & Replay" - "Rebuild positions from DB").
  */
 @Slf4j
 @Service
@@ -40,8 +40,21 @@ public class PositionService {
     private static final double SIZE_EPSILON = 1e-9;
 
     private final DomainEventPublisher eventPublisher;
+    private final PositionRepository positionRepository;
 
     private final Map<String, Position> positions = new ConcurrentHashMap<>();
+
+    /**
+     * Rebuilds in-memory position state from MongoDB on startup, per section 11
+     * "Rebuild positions from DB".
+     */
+    @PostConstruct
+    void rebuildFromDatabase() {
+    	log.info("positionService rebuilding positions from database");
+        List<PositionDocument> documents = positionRepository.findAll();
+        documents.forEach(document -> positions.put(document.getPositionId(), fromDocument(document)));
+        log.info("positionService rebuilt {} positions from database", documents.size());
+    }
 
     /** Convenience overload: generates a fresh correlationId. */
     public Position open(TradeDecision decision, String productId, String positionId, Instant now) {
@@ -83,6 +96,7 @@ public class PositionService {
 
         log.info("position opened positionId={} productId={} direction={} entry={} stop={} target={} size={}",
                 positionId, productId, signal.direction(), signal.entry(), signal.stop(), signal.target(), decision.positionSize());
+        positionRepository.save(toDocument(result));
         eventPublisher.publish(PositionOpenedEvent.of(correlationId, result));
         return result;
     }
@@ -124,6 +138,7 @@ public class PositionService {
                     positionId, fillQuantity, newFilled, target);
             return next;
         });
+        positionRepository.save(toDocument(updated));
         eventPublisher.publish(OrderFilledEvent.of(correlationId, positionId, fillQuantity, updated.filledSize(), now));
         return updated;
     }
@@ -162,6 +177,7 @@ public class PositionService {
         });
 
         if (result.status() == PositionStatus.CLOSED && now.equals(result.closedAt())) {
+            positionRepository.save(toDocument(result));
             eventPublisher.publish(PositionClosedEvent.of(correlationId, result));
         }
         return result;
@@ -185,6 +201,7 @@ public class PositionService {
             log.info("position closed positionId={} reason={}", positionId, reason);
             return current.toBuilder().status(PositionStatus.CLOSED).closedAt(now).closeReason(reason).build();
         });
+        positionRepository.save(toDocument(result));
         eventPublisher.publish(PositionClosedEvent.of(correlationId, result));
         return result;
     }
@@ -208,5 +225,39 @@ public class PositionService {
             throw new IllegalStateException("illegal position state transition for %s: %s -> %s"
                     .formatted(positionId, from, to));
         }
+    }
+
+    private static PositionDocument toDocument(Position position) {
+        PositionDocument document = new PositionDocument();
+        document.setPositionId(position.positionId());
+        document.setProductId(position.productId());
+        document.setDirection(position.direction() == null ? null : position.direction().name());
+        document.setEntryPrice(position.entryPrice());
+        document.setStopPrice(position.stopPrice());
+        document.setTargetPrice(position.targetPrice());
+        document.setRequestedSize(position.requestedSize());
+        document.setFilledSize(position.filledSize());
+        document.setStatus(position.status() == null ? null : position.status().name());
+        document.setOpenedAt(position.openedAt());
+        document.setClosedAt(position.closedAt());
+        document.setCloseReason(position.closeReason());
+        return document;
+    }
+
+    private static Position fromDocument(PositionDocument document) {
+        return Position.builder()
+                .positionId(document.getPositionId())
+                .productId(document.getProductId())
+                .direction(document.getDirection() == null ? null : TradeDirection.valueOf(document.getDirection()))
+                .entryPrice(document.getEntryPrice())
+                .stopPrice(document.getStopPrice())
+                .targetPrice(document.getTargetPrice())
+                .requestedSize(document.getRequestedSize())
+                .filledSize(document.getFilledSize())
+                .status(document.getStatus() == null ? null : PositionStatus.valueOf(document.getStatus()))
+                .openedAt(document.getOpenedAt())
+                .closedAt(document.getClosedAt())
+                .closeReason(document.getCloseReason())
+                .build();
     }
 }

@@ -3,9 +3,43 @@ server:
 spring:
   application:
     name: smart-trader-v2
+# Database configuration
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/${DB_NAME:coinbase-trader}}
 
 coinbase:
   api:
     base-url: ${COINBASE_API_BASE_URL:https://api.coinbase.com}
     bearer-token: ${COINBASE_BEARER_TOKEN:}
     api-secret: ${COINBASE_API_SECRET:}
+  portfolio-id: ${COINBASE_PORTFOLIO_ID:}
+
+# TradingScheduler is disabled by default: it places REAL orders once enabled.
+# Turn on deliberately, after paper-testing the pipeline end to end.
+trading:
+  scheduler:
+    enabled: ${TRADING_SCHEDULER_ENABLED:true}
+    excluded-product-ids: ${TRADING_SCHEDULER_PRODUCT_IDS:}
+    granularity: ${TRADING_SCHEDULER_GRANULARITY:FIFTEEN_MINUTE}
+    fixed-delay-ms: ${TRADING_SCHEDULER_FIXED_DELAY_MS:60000}
+    user-id: ${TRADING_SCHEDULER_USER_ID:}
+    capital: ${TRADING_SCHEDULER_CAPITAL:10000}
+    risk-percent: ${TRADING_SCHEDULER_RISK_PERCENT:0.01}
+
+
+
+# Logging configuration
+logging: 
+  level:
+    org:
+      springframework:
+        data:
+          mongodb:
+            core:
+              MongoTemplate: INFO
+            repository:
+              Query: INFO
+            driver:
+              protocol:
+                command: INFO

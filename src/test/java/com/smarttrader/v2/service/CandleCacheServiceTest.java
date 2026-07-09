@@ -112,4 +112,21 @@ class CandleCacheServiceTest {
         assertThat(candleCache.getIfPresent(new CandleCacheKey("BTC-USD", Granularity.ONE_HOUR))).containsExactly(hourly);
         assertThat(candleCache.getIfPresent(new CandleCacheKey("BTC-USD", Granularity.FOUR_HOUR))).containsExactly(daily);
     }
+
+    @Test
+    void edgeCase_repeatedIncrementalFetchesAppendWithoutReorderingOrDroppingHistory() {
+        Candle c1 = candleAt(100, 1.0);
+        when(coinbaseClient.getCandles("BTC-USD", Granularity.ONE_HOUR)).thenReturn(List.of(c1));
+        candleCacheService.getCandles("BTC-USD", Granularity.ONE_HOUR);
+
+        Candle c2 = candleAt(200, 2.0);
+        when(coinbaseClient.getCandles("BTC-USD", Granularity.ONE_HOUR, Instant.ofEpochSecond(101))).thenReturn(List.of(c2));
+        candleCacheService.getCandles("BTC-USD", Granularity.ONE_HOUR);
+
+        Candle c3 = candleAt(300, 3.0);
+        when(coinbaseClient.getCandles("BTC-USD", Granularity.ONE_HOUR, Instant.ofEpochSecond(201))).thenReturn(List.of(c3));
+        List<Candle> result = candleCacheService.getCandles("BTC-USD", Granularity.ONE_HOUR);
+
+        assertThat(result).containsExactly(c1, c2, c3);
+    }
 }

@@ -23,13 +23,15 @@ class PositionServiceTest {
 
     @Mock
     private DomainEventPublisher eventPublisher;
+    @Mock
+    private PositionRepository positionRepository;
 
     private PositionService positionService;
     private final Instant now = Instant.parse("2026-01-01T00:00:00Z");
 
     @BeforeEach
     void setUp() {
-        positionService = new PositionService(eventPublisher);
+        positionService = new PositionService(eventPublisher, positionRepository);
     }
 
     private TradeDecision approvedDecision(TradeDirection direction, double entry, double stop, double target, double size) {
@@ -202,5 +204,45 @@ class PositionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> positionService.evaluateUnrealizedLossGuard("missing", 100.0, now))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // --- Section 11: Recovery & Replay ---
+
+    @Test
+    void everyStateChangeIsPersistedToMongo() {
+        TradeDecision decision = approvedDecision(TradeDirection.LONG, 100.0, 95.0, 110.0, 10.0);
+
+        positionService.open(decision, "BTC-USD", "pos-13", now);
+        positionService.recordFill("pos-13", 10.0, now);
+        positionService.close("pos-13", "target hit", now);
+
+        org.mockito.ArgumentCaptor<PositionDocument> captor = org.mockito.ArgumentCaptor.forClass(PositionDocument.class);
+        org.mockito.Mockito.verify(positionRepository, org.mockito.Mockito.times(3)).save(captor.capture());
+        PositionDocument lastSaved = captor.getValue();
+        assertThat(lastSaved.getPositionId()).isEqualTo("pos-13");
+        assertThat(lastSaved.getStatus()).isEqualTo("CLOSED");
+    }
+
+    @Test
+    void rebuildFromDatabaseRestoresPositionsIntoMemoryOnStartup() {
+        PositionDocument document = new PositionDocument();
+        document.setPositionId("pos-14");
+        document.setProductId("ETH-USD");
+        document.setDirection("LONG");
+        document.setEntryPrice(100.0);
+        document.setStopPrice(95.0);
+        document.setTargetPrice(110.0);
+        document.setRequestedSize(5.0);
+        document.setFilledSize(5.0);
+        document.setStatus("OPEN");
+        document.setOpenedAt(now);
+        org.mockito.Mockito.when(positionRepository.findAll()).thenReturn(java.util.List.of(document));
+
+        PositionService restored = new PositionService(eventPublisher, positionRepository);
+        restored.rebuildFromDatabase();
+
+        assertThat(restored.find("pos-14")).isPresent();
+        assertThat(restored.find("pos-14").get().status()).isEqualTo(PositionStatus.OPEN);
+        assertThat(restored.find("pos-14").get().productId()).isEqualTo("ETH-USD");
     }
 }
