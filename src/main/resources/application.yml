@@ -43,3 +43,7 @@ logging:
             driver:
               protocol:
                 command: INFO
+    com:
+      smarttrader:
+        v2:
+          event: INFO								

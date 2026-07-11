@@ -24,7 +24,7 @@ public class DomainEventPublisher {
     private final EventStore eventStore;
 
     public void publish(DomainEvent event) {
-        log.info("event type={} eventId={} correlationId={} timestamp={}",
+        log.debug("event type={} eventId={} correlationId={} timestamp={}",
                 event.getClass().getSimpleName(), event.eventId(), event.correlationId(), event.timestamp());
         eventStore.record(event);
         applicationEventPublisher.publishEvent(event);
