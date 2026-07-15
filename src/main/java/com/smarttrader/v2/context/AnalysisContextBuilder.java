@@ -5,28 +5,31 @@ import java.util.List;
 import org.springframework.stereotype.Service;
 
 import com.smarttrader.v2.client.Granularity;
+import com.smarttrader.v2.constants.PositioningConstants;
 import com.smarttrader.v2.liquidity.LiquidityMapperService;
 import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.Candle;
 import com.smarttrader.v2.model.LiquidityMap;
 import com.smarttrader.v2.model.TrendDirection;
+import com.smarttrader.v2.positioning.CVDCalculatorService;
+import com.smarttrader.v2.positioning.FundingMonitorService;
+import com.smarttrader.v2.positioning.OIMonitorService;
 import com.smarttrader.v2.service.ProductService;
 
 import lombok.RequiredArgsConstructor;
 
 /**
  * Builds an AnalysisContext for a symbol/granularity, per
- * V2_5_IMPLEMENTATION_PLAN_INCREMENTAL.md section 1A.3. This is the "Context Builder" the
- * pipeline (Market Data -> Context Builder -> MarketRegimeDetector -> ...) always assumed
- * but never had an implementation for in this codebase; Phase 1A needs it to attach a
- * LiquidityMap to something.
+ * V2_5_IMPLEMENTATION_PLAN_INCREMENTAL.md sections 1A.3 and 1B.5. This is the "Context
+ * Builder" the pipeline (Market Data -> Context Builder -> MarketRegimeDetector -> ...)
+ * always assumed but never had an implementation for in this codebase.
  *
  * Indicator math (EMA/ATR/support-resistance/consolidation/breakout) is a reasonable,
  * standard implementation, not something any spec version prescribes exactly - flagging
- * this as the one place in the pipeline that's an interpretation, not a transcription of
- * a spec rule. cvd1m and the other v2.5 crowd-positioning fields are left at their
- * AnalysisContext defaults here: real CVD needs the matches-stream ingestion that's
- * Phase 1B's job, not Phase 1A's.
+ * this as one place in the pipeline that's an interpretation, not a transcription of a
+ * spec rule. cvdDivergence/oiConfirmsUp/oiConfirmsDown are similarly this builder's own
+ * reading of V2_TECH_SPEC_v2.5.md section 4's prose rules, since neither the spec nor the
+ * plan spells out their exact computation.
  */
 @Service
 @RequiredArgsConstructor
@@ -49,6 +52,9 @@ public class AnalysisContextBuilder {
 
     private final ProductService productService;
     private final LiquidityMapperService liquidityMapper;
+    private final CVDCalculatorService cvdCalculator;
+    private final FundingMonitorService fundingMonitor;
+    private final OIMonitorService oiMonitor;
 
     public AnalysisContext build(String symbol, Granularity granularity) {
         List<Candle> candles = productService.getLiveCandles(symbol, granularity);
@@ -56,9 +62,47 @@ public class AnalysisContextBuilder {
 
         LiquidityMap liquidityMap = liquidityMapper.mapLiquidity(symbol, v22Ctx);
 
+        double cvd1m = cvdCalculator.getCVD1m(symbol);
+        double cvdSlope5m = cvdCalculator.getCVDSlope5m(symbol);
+        boolean cvdDivergence = isPriceNewHigh(candles, PositioningConstants.CVD_DIVERGENCE_LOOKBACK)
+                && !cvdCalculator.isNewHigh(symbol, PositioningConstants.CVD_DIVERGENCE_LOOKBACK);
+
+        double oiChange1h = oiMonitor.getOIChange1h(symbol);
+        double oiChange24h = oiMonitor.getOIChange24h(symbol);
+        boolean priceUp = isPriceUp(candles);
+        boolean oiConfirmsUp = priceUp && oiChange1h > 0;
+        boolean oiConfirmsDown = !priceUp && oiChange1h > 0;
+
         return v22Ctx.toBuilder()
                 .liquidityMap(liquidityMap)
+                .cvd1m(cvd1m)
+                .cvdSlope5m(cvdSlope5m)
+                .cvdDivergence(cvdDivergence)
+                .fundingRateBps(fundingMonitor.getCurrentFundingRateBps(symbol))
+                .fundingPercentile30d(fundingMonitor.getFundingPercentile30d(symbol))
+                .oiChange1h(oiChange1h)
+                .oiChange24h(oiChange24h)
+                .oiConfirmsUp(oiConfirmsUp)
+                .oiConfirmsDown(oiConfirmsDown)
                 .build();
+    }
+
+    /** True if the latest close exceeds the highest close of the prior `lookback` candles. */
+    private boolean isPriceNewHigh(List<Candle> candles, int lookback) {
+        if (candles.size() < 2) {
+            return false;
+        }
+        List<Candle> priorCandles = candles.subList(0, candles.size() - 1);
+        List<Candle> window = lastN(priorCandles, lookback);
+        double priorHigh = window.stream().mapToDouble(Candle::close).max().orElse(Double.NEGATIVE_INFINITY);
+        return candles.get(candles.size() - 1).close() > priorHigh;
+    }
+
+    private boolean isPriceUp(List<Candle> candles) {
+        if (candles.size() < 2) {
+            return false;
+        }
+        return candles.get(candles.size() - 1).close() > candles.get(candles.size() - 2).close();
     }
 
     /**
