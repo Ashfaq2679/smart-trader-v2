@@ -25,9 +25,11 @@ import lombok.extern.slf4j.Slf4j;
  * whole rolling-history API for one caller).
  *
  * Section 6.1: spot Coinbase Advanced Trade cannot short by default (venue.can-short).
- * When it can't, this always returns invalid: making the detected setup visible as a
- * "Siren-grade alert + defensive automation" is Phase 3's job (Opportunity Siren), not
- * something a SignalResult (which only models executable trades) can carry on its own.
+ * When it can't, the signal still carries the real direction/entry/stop/target (just
+ * valid=false) rather than collapsing to SignalResult.invalid()'s direction=NONE: Phase 3's
+ * OpportunitySirenService needs to tell "no setup at all" apart from "setup found but not
+ * executable" (section 7: "non-executable opportunities still fire at full severity"),
+ * and direction=NONE would erase that distinction.
  */
 @Slf4j
 @Component
@@ -46,17 +48,16 @@ public class ShortSideStrategy implements TradingStrategy {
         if (!isShortSetup(ctx)) {
             return SignalResult.invalid(NAME);
         }
-        if (!canShort) {
-            log.info("strategy={} valid=false reason=venue cannot short, detected TREND_DOWN setup not executable", NAME);
-            return SignalResult.invalid(NAME);
-        }
 
         double entry = ctx.price();
         double stop = entry + ctx.atr() * TradingConstants.BREAKOUT_RISK_ATR;
         double target = entry - ctx.atr() * TradingConstants.BREAKOUT_REWARD_ATR;
 
         double riskReward = RiskRewardCalculator.riskReward(TradeDirection.SHORT, entry, stop, target);
-        boolean valid = riskReward >= TradingConstants.MIN_RISK_REWARD;
+        boolean valid = riskReward >= TradingConstants.MIN_RISK_REWARD && canShort;
+        if (!canShort) {
+            log.info("strategy={} valid=false reason=venue cannot short, detected TREND_DOWN setup not executable", NAME);
+        }
 
         SignalResult result = SignalResult.builder()
                 .valid(valid)

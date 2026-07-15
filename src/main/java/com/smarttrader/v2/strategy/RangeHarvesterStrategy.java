@@ -19,9 +19,10 @@ import lombok.extern.slf4j.Slf4j;
  * that replaces v2.2's timid Range-Fade.
  *
  * "Sell the top" needs a short, which section 6.1 gates behind venue.can-short (false by
- * default for spot Coinbase Advanced Trade): when shorting isn't enabled, a top-of-range
- * touch produces an invalid signal rather than an unexecutable SHORT (Phase 3's
- * Opportunity Siren is where that becomes a "Siren + flatten longs" alert instead).
+ * default for spot Coinbase Advanced Trade): when shorting isn't enabled, the signal keeps
+ * its real direction/entry/stop/target with valid=false, rather than collapsing to
+ * SignalResult.invalid()'s direction=NONE - Phase 3's OpportunitySirenService needs that
+ * distinction to fire a "Siren + flatten longs" alert instead of staying silent.
  *
  * Round-trip caps (max 2 per side per session) and the 20-trade win-rate floor (section
  * 8) need trade-history state a stateless, ctx-only strategy doesn't have; those belong
@@ -72,19 +73,22 @@ public class RangeHarvesterStrategy implements TradingStrategy {
     }
 
     private SignalResult sellTheTop(AnalysisContext ctx) {
-        if (!canShort) {
-            log.info("strategy={} valid=false reason=venue cannot short, sell-the-top not executable", NAME);
-            return SignalResult.invalid(NAME);
-        }
         double entry = ctx.price();
         double stop = ctx.nearestResistance() + ctx.atr() * PlaybookConstants.RANGE_HARVESTER_STOP_ATR_MULTIPLE;
         double target = (ctx.nearestSupport() + ctx.nearestResistance()) / 2.0;
-        return buildSignal(ctx, TradeDirection.SHORT, entry, stop, target);
+        if (!canShort) {
+            log.info("strategy={} valid=false reason=venue cannot short, sell-the-top not executable", NAME);
+        }
+        return buildSignal(ctx, TradeDirection.SHORT, entry, stop, target, canShort);
     }
 
     private SignalResult buildSignal(AnalysisContext ctx, TradeDirection direction, double entry, double stop, double target) {
+        return buildSignal(ctx, direction, entry, stop, target, true);
+    }
+
+    private SignalResult buildSignal(AnalysisContext ctx, TradeDirection direction, double entry, double stop, double target, boolean executable) {
         double riskReward = RiskRewardCalculator.riskReward(direction, entry, stop, target);
-        boolean valid = riskReward >= PlaybookConstants.RANGE_HARVESTER_MIN_RISK_REWARD;
+        boolean valid = riskReward >= PlaybookConstants.RANGE_HARVESTER_MIN_RISK_REWARD && executable;
 
         SignalResult result = SignalResult.builder()
                 .valid(valid)
