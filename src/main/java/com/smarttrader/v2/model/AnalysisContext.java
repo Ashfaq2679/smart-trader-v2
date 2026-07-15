@@ -18,7 +18,7 @@ import lombok.Builder;
  * or consumed by anything - MarketRegimeDetector/strategies still only read the v2.2 fields
  * until Phase 1A (liquidity), 1B (crowd positioning) and 2 (new strategies) wire them up.
  */
-@Builder
+@Builder(toBuilder = true)
 public record AnalysisContext(
         // --- v2.2 fields ---
         double price,
