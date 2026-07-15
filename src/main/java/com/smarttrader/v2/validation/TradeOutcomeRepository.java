@@ -14,4 +14,10 @@ import com.smarttrader.v2.model.TradeOutcome;
 public interface TradeOutcomeRepository extends MongoRepository<TradeOutcome, String> {
 
     List<TradeOutcome> findTop20ByStrategyNameAndSymbolOrderByClosedAtDesc(String strategyName, String symbol);
+
+    /** Used by SlippageCalibrator (Phase 5.1), which aggregates across strategies per symbol. */
+    List<TradeOutcome> findTop100BySymbolOrderByClosedAtDesc(String symbol);
+
+    /** Used by MetaAllocator (Phase 5.3) to rank FULL-stage strategies by rolling expectancy. */
+    List<TradeOutcome> findTop60ByStrategyNameAndSymbolOrderByClosedAtDesc(String strategyName, String symbol);
 }

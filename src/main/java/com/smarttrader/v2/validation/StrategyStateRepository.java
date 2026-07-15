@@ -1,8 +1,11 @@
 package com.smarttrader.v2.validation;
 
+import java.util.List;
+
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.stereotype.Repository;
 
+import com.smarttrader.v2.model.StrategyStage;
 import com.smarttrader.v2.model.StrategyState;
 
 /**
@@ -12,4 +15,7 @@ import com.smarttrader.v2.model.StrategyState;
 public interface StrategyStateRepository extends MongoRepository<StrategyState, String> {
 
     StrategyState findByStrategyNameAndSymbol(String strategyName, String symbol);
+
+    /** Used by MetaAllocator (Phase 5.3) to find candidates for risk-budget reallocation. */
+    List<StrategyState> findAllByStage(StrategyStage stage);
 }

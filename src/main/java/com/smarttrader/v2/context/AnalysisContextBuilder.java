@@ -167,10 +167,7 @@ public class AnalysisContextBuilder {
     }
 
     private double trueRange(Candle current, Candle previous) {
-        double highLow = current.high() - current.low();
-        double highPrevClose = Math.abs(current.high() - previous.close());
-        double lowPrevClose = Math.abs(current.low() - previous.close());
-        return Math.max(highLow, Math.max(highPrevClose, lowPrevClose));
+        return com.smarttrader.v2.util.CandleMath.trueRange(current, previous);
     }
 
     private boolean isVolumeSpike(List<Candle> candles) {
