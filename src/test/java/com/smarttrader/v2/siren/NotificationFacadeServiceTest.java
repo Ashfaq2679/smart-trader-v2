@@ -2,6 +2,7 @@ package com.smarttrader.v2.siren;
 
 import org.junit.jupiter.api.Test;
 
+import com.smarttrader.v2.event.ExecutionDegradedEvent;
 import com.smarttrader.v2.event.OpportunitySirenEvent;
 import com.smarttrader.v2.model.Severity;
 
@@ -32,5 +33,15 @@ class NotificationFacadeServiceTest {
     @Test
     void sideways_infoSeverityIsANoOp() {
         service.onOpportunitySiren(event(Severity.INFO));
+    }
+
+    @Test
+    void edgeCase_executionDegradedEventLogsBoldBannerWithoutThrowing() {
+        ExecutionDegradedEvent event = new ExecutionDegradedEvent();
+        event.symbol = "BTC-USD";
+        event.reason = "missing order credentials";
+        event.detail = "live-enabled=true but no key configured";
+
+        service.onExecutionDegraded(event);
     }
 }

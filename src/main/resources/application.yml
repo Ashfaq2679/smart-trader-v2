@@ -14,12 +14,20 @@ coinbase:
     base-url: ${COINBASE_API_BASE_URL:https://api.coinbase.com}
     bearer-token: ${COINBASE_BEARER_TOKEN:}
     api-secret: ${COINBASE_API_SECRET:}
+    # CDP Cloud API key credentials, used only for order placement (authenticated
+    # endpoints). Candles keep using bearer-token/the public endpoint above - these are
+    # unrelated credentials. private-key is the PEM-encoded EC private key; keep it out
+    # of source control, source it from env/secret manager only.
+    key-name: ${COINBASE_API_KEY_NAME:}
+    private-key: ${COINBASE_API_PRIVATE_KEY:}
+    portfolio-id: ${COINBASE_PORTFOLIO_ID:}
 
 # v2.5 feature configuration, per V2_5_IMPLEMENTATION_PLAN_INCREMENTAL.md section 0.6.
-# Not yet consumed by any bean (Phase 0 is additive-only) - these values are the
-# priors Phase 1A (liquidity) and 1B (crowd positioning) will read.
 smart-trader:
   v2_5:
+    # Symbols polled by TradingScheduler and the positioning monitors (Funding/OI). Empty
+    # by default so nothing polls Coinbase until explicitly configured.
+    tracked-symbols: ["ZEC-USDC"]
     liquidity:
       ttl-days: 5
       eqh-eql-threshold: 0.15 # 0.15 x ATR
@@ -30,3 +38,36 @@ smart-trader:
     cascade:
       bar-range-multiplier: 3
       oi-change-threshold: -0.05
+  # TradingScheduler: polls Coinbase for candles per granularity and runs tracked-symbols
+  # through the decision pipeline. Everything defaults to disabled (see
+  # TradingScheduler's javadoc) - flip `enabled: true` plus whichever granularities you
+  # want, and set v2_5.tracked-symbols, to actually start polling.
+  scheduler:
+    enabled: true
+    capital: 100
+    granularities:
+      one-minute:
+        enabled: false
+        interval-ms: 60000
+      five-minute:
+        enabled: false
+        interval-ms: 300000
+      fifteen-minute:
+        enabled: true
+        interval-ms: 900000
+      thirty-minute:
+        enabled: false
+        interval-ms: 1800000
+      one-hour:
+        enabled: false
+        interval-ms: 3600000
+      four-hour:
+        enabled: false
+        interval-ms: 14400000
+  # Order execution: whether TradeEngine-approved decisions place real market orders.
+  # Defaults to false (dry-run: every approved decision is logged/persisted as an intended
+  # order, nothing is sent to Coinbase). Flip to true only once coinbase.api.key-name/
+  # private-key are configured - if they aren't, OrderService raises a BOLD alert and
+  # stays in dry-run rather than silently doing nothing.
+  execution:
+    live-enabled: true
