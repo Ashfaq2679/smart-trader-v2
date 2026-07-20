@@ -1,6 +1,8 @@
 package com.smarttrader.v2.execution;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -42,7 +44,7 @@ class PositionServiceTest {
                 .id("order-1").symbol("BTC-USD").side(side).orderType("MARKET")
                 .baseSize(1.5).clientOrderId("c1").status(status).dryRun(status == OrderStatus.DRY_RUN)
                 .strategyName("PullbackStrategy").regime(MarketRegime.PULLBACK)
-                .createdAtNs(1L).createdAt(Instant.now()).build();
+                .createdAtNs(1L).createdAt(LocalDateTime.now(ZoneId.of("America/New_York"))).build();
     }
 
     private SignalResult signal(TradeDirection direction) {

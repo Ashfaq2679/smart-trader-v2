@@ -56,7 +56,7 @@ public class TradingScheduler {
     @Value("${smart-trader.scheduler.enabled:false}")
     private boolean schedulerEnabled;
 
-    @Value("${smart-trader.v2_5.tracked-symbols:ZEC-USDC, POL-USDC}")
+    @Value("${smart-trader.v2_5.tracked-symbols}")
     private List<String> trackedSymbols;
 
     @Value("${smart-trader.scheduler.capital:10000}")
@@ -135,7 +135,7 @@ public class TradingScheduler {
             log.info("scheduler symbol={} granularity={} approved={} reason={}",
                     symbol, granularity, decision.approved(), decision.reason());
 
-            orderService.execute(decision, symbol)
+            orderService.execute(decision, symbol, ctx)
                     .ifPresent(order -> positionService.onOrderPlaced(order, decision.signal()));
         } catch (Exception e) {
             log.error("scheduler symbol={} granularity={} failed to poll/decide/execute: {}",

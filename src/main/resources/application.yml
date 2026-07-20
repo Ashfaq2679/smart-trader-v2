@@ -8,6 +8,9 @@ spring:
       # Lets @Indexed(expireAfterSeconds=...) (e.g. LiquidityPool's TTL index) create
       # itself at startup instead of requiring a manual index-creation step.
       auto-index-creation: true
+      host: localhost
+      port: 27017
+      database: coinbase_v2
 
 coinbase:
   api:
@@ -27,7 +30,7 @@ smart-trader:
   v2_5:
     # Symbols polled by TradingScheduler and the positioning monitors (Funding/OI). Empty
     # by default so nothing polls Coinbase until explicitly configured.
-    tracked-symbols: ["ZEC-USDC"]
+    tracked-symbols:
     liquidity:
       ttl-days: 5
       eqh-eql-threshold: 0.15 # 0.15 x ATR

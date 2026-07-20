@@ -1,5 +1,12 @@
 package com.smarttrader.v2.execution;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -18,19 +25,13 @@ import com.smarttrader.v2.event.OrderFailedEvent;
 import com.smarttrader.v2.event.OrderPlacedEvent;
 import com.smarttrader.v2.event.TradingEvent;
 import com.smarttrader.v2.event.TradingEventPublisher;
+import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.MarketRegime;
 import com.smarttrader.v2.model.Order;
 import com.smarttrader.v2.model.OrderStatus;
 import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.model.TradeDirection;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
@@ -69,7 +70,7 @@ class OrderServiceTest {
         OrderService service = service(false);
         TradeDecision rejected = TradeDecision.rejected(MarketRegime.PANIC, SignalResult.invalid("x"), "no signal");
 
-        Optional<Order> result = service.execute(rejected, "BTC-USD");
+        Optional<Order> result = service.execute(rejected, "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isEmpty();
         verifyNoInteractions(orderRepository, eventPublisher);
@@ -83,7 +84,7 @@ class OrderServiceTest {
         TradeDecision decision = TradeDecision.builder().approved(true).regime(MarketRegime.PULLBACK)
                 .signal(noneSignal).positionSize(1).reason("approved").build();
 
-        Optional<Order> result = service.execute(decision, "BTC-USD");
+        Optional<Order> result = service.execute(decision, "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isEmpty();
         verifyNoInteractions(orderRepository, eventPublisher);
@@ -94,7 +95,7 @@ class OrderServiceTest {
         OrderService service = service(false);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD");
+        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isPresent();
         assertThat(result.get().isDryRun()).isTrue();
@@ -113,7 +114,7 @@ class OrderServiceTest {
         CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-123").build();
         when(ordersService.createOrder(any())).thenReturn(response);
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD");
+        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isPresent();
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
@@ -131,7 +132,7 @@ class OrderServiceTest {
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(ordersClientFactory.create()).thenReturn(Optional.empty());
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD");
+        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isPresent();
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
@@ -150,7 +151,7 @@ class OrderServiceTest {
         CreateOrderResponse response = new CreateOrderResponse.Builder().success(false).failureReason("insufficient funds").build();
         when(ordersService.createOrder(any())).thenReturn(response);
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD");
+        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isPresent();
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
@@ -165,7 +166,7 @@ class OrderServiceTest {
         when(ordersClientFactory.create()).thenReturn(Optional.of(ordersService));
         when(ordersService.createOrder(any())).thenThrow(new RuntimeException("network timeout"));
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD");
+        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
         assertThat(result).isPresent();
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);

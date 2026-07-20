@@ -1,7 +1,8 @@
 package com.smarttrader.v2.execution;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,6 +22,7 @@ import com.smarttrader.v2.event.ExecutionDegradedEvent;
 import com.smarttrader.v2.event.OrderFailedEvent;
 import com.smarttrader.v2.event.OrderPlacedEvent;
 import com.smarttrader.v2.event.TradingEventPublisher;
+import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.Order;
 import com.smarttrader.v2.model.OrderStatus;
 import com.smarttrader.v2.model.TradeDecision;
@@ -58,7 +60,7 @@ public class OrderService {
     @Value("${smart-trader.execution.live-enabled:false}")
     private boolean liveEnabled;
 
-    public Optional<Order> execute(TradeDecision decision, String symbol) {
+    public Optional<Order> execute(TradeDecision decision, String symbol, AnalysisContext ctx) {
         if (!decision.approved()) {
             return Optional.empty();
         }
@@ -78,7 +80,7 @@ public class OrderService {
                 .strategyName(decision.signal().strategyName())
                 .regime(decision.regime())
                 .createdAtNs(System.nanoTime())
-                .createdAt(Instant.now())
+                .createdAt(LocalDateTime.now(ZoneId.of("America/New_York")))
                 .build();
 
         if (!liveEnabled) {

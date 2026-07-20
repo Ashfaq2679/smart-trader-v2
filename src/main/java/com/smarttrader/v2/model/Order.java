@@ -1,6 +1,6 @@
 package com.smarttrader.v2.model;
 
-import java.time.Instant;
+import java.time.LocalDateTime;
 
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.Indexed;
@@ -57,5 +57,7 @@ public class Order {
     private long createdAtNs;
 
     @Indexed
-    private Instant createdAt;
+    private LocalDateTime createdAt;
+    
+    private AnalysisContext analysisContext;
 }
