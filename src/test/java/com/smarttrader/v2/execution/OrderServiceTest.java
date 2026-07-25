@@ -18,7 +18,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
 import com.coinbase.advanced.orders.OrdersService;
-import com.smarttrader.v2.client.CoinbaseOrdersClientFactory;
+import com.smarttrader.v2.client.CoinbaseOrdersClientFactoryV2;
 import com.smarttrader.v2.client.CoinbaseProperties;
 import com.smarttrader.v2.event.ExecutionDegradedEvent;
 import com.smarttrader.v2.event.OrderFailedEvent;
@@ -37,7 +37,7 @@ import com.smarttrader.v2.model.TradeDirection;
 class OrderServiceTest {
 
     @Mock
-    private CoinbaseOrdersClientFactory ordersClientFactory;
+    private CoinbaseOrdersClientFactoryV2 ordersClientFactory;
 
     @Mock
     private OrderRepository orderRepository;
@@ -172,5 +172,72 @@ class OrderServiceTest {
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
         assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
         verify(eventPublisher, times(2)).publish(any());
+    }
+
+    private Order manualOrder(String side, double baseSize) {
+        return Order.builder().symbol("BTC-USD").side(side).baseSize(baseSize).build();
+    }
+
+    @Test
+    void bullish_placeOrderDryRunPersistsOrderForGivenUser() {
+        OrderService service = service(false);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of());
+
+        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().isDryRun()).isTrue();
+        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.DRY_RUN);
+        assertThat(result.get().getClientOrderId()).isNotBlank();
+        assertThat(result.get().getOrderType()).isEqualTo("MARKET");
+        verifyNoInteractions(ordersClientFactory, eventPublisher);
+    }
+
+    @Test
+    void bearish_placeOrderWithMissingSideIsRejectedWithoutTouchingRepository() {
+        OrderService service = service(false);
+
+        Optional<Order> result = service.placeOrder("trader-1", manualOrder(null, 2.0));
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(orderRepository, eventPublisher, ordersClientFactory);
+    }
+
+    @Test
+    void bearish_placeOrderWithNonPositiveBaseSizeIsRejected() {
+        OrderService service = service(false);
+
+        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 0.0));
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(orderRepository, eventPublisher, ordersClientFactory);
+    }
+
+    @Test
+    void edgeCase_placeOrderRejectsAnExactDuplicateFromTheSameMinute() {
+        OrderService service = service(false);
+        Order recent = Order.builder()
+                .symbol("BTC-USD").side("BUY").baseSize(2.0)
+                .createdAt(java.time.LocalDateTime.now(java.time.ZoneId.of("America/New_York")))
+                .build();
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of(recent));
+
+        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
+
+        assertThat(result).isEmpty();
+        verify(orderRepository, times(0)).save(any());
+    }
+
+    @Test
+    void edgeCase_placeOrderWithNullUserIdFallsBackToDefaultUser() {
+        OrderService service = service(false);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of());
+
+        Optional<Order> result = service.placeOrder(null, manualOrder("SELL", 1.0));
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getSide()).isEqualTo("SELL");
     }
 }

@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import com.smarttrader.v2.client.CoinbaseClient;
-import com.smarttrader.v2.client.CoinbaseClientFactory;
+import com.smarttrader.v2.client.CoinbaseClientFactoryV2;
 import com.smarttrader.v2.client.Granularity;
 import com.smarttrader.v2.model.Candle;
 import com.smarttrader.v2.repository.ProductRepository;
@@ -25,7 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class ProductService {
 
-    private final CoinbaseClientFactory coinbaseClientFactory;
+    private final CoinbaseClientFactoryV2 coinbaseClientFactory;
     private final ProductRepository productRepository;
 
     /**

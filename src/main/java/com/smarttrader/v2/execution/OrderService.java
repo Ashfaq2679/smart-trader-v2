@@ -3,6 +3,7 @@ package com.smarttrader.v2.execution;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -15,7 +16,7 @@ import com.coinbase.advanced.model.orders.CreateOrderResponse;
 import com.coinbase.advanced.model.orders.MarketIoc;
 import com.coinbase.advanced.model.orders.OrderConfiguration;
 import com.coinbase.advanced.orders.OrdersService;
-import com.smarttrader.v2.client.CoinbaseOrdersClientFactory;
+import com.smarttrader.v2.client.CoinbaseOrdersClientFactoryV2;
 import com.smarttrader.v2.client.CoinbaseProperties;
 import com.smarttrader.v2.constants.OrderConstants;
 import com.smarttrader.v2.event.ExecutionDegradedEvent;
@@ -41,7 +42,7 @@ import lombok.extern.slf4j.Slf4j;
  * is the expected, quiet default state - not a degradation, no alert.
  *
  * Once live-enabled=true, a real MARKET order is placed via the official Coinbase SDK
- * (CoinbaseOrdersClientFactory). If live mode is on but can't actually place a real order
+ * (CoinbaseOrdersClientFactoryV2). If live mode is on but can't actually place a real order
  * for any reason - missing/invalid credentials, a Coinbase rejection, an exception - that
  * IS the system moving away from its stated target, so it publishes ExecutionDegradedEvent,
  * which NotificationFacadeService renders as a BOLD banner. Silence is never the failure
@@ -52,7 +53,10 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class OrderService {
 
-    private final CoinbaseOrdersClientFactory ordersClientFactory;
+    /** Single-portfolio system, no multi-user support yet - see placeOrder()'s javadoc. */
+    private static final String USER_ID = "ADMIN";
+
+    private final CoinbaseOrdersClientFactoryV2 ordersClientFactory;
     private final CoinbaseProperties coinbaseProperties;
     private final OrderRepository orderRepository;
     private final TradingEventPublisher eventPublisher;
@@ -81,6 +85,7 @@ public class OrderService {
                 .regime(decision.regime())
                 .createdAtNs(System.nanoTime())
                 .createdAt(LocalDateTime.now(ZoneId.of("America/New_York")))
+                .analysisContext(ctx)
                 .build();
 
         if (!liveEnabled) {
@@ -94,6 +99,90 @@ public class OrderService {
 
         order.setDryRun(false);
         return Optional.of(placeLive(order));
+    }
+
+    /**
+     * Places a market order directly from a pre-built Order - a manual/API-triggered
+     * placement path, as opposed to execute()'s TradeDecision-driven path. Reuses the
+     * same dry-run/live logic as execute() (see placeLive()'s javadoc for what "live"
+     * means) rather than duplicating it.
+     *
+     * Ported from smart-trader-v1's OrderService.placeOrder. v1's version routed through
+     * a per-user OrdersService cache (ClientService/CoinbaseAdvancedClient keyed by
+     * userId) and validated against a per-user funds/quantity ledger (UserService); v2 has
+     * neither a multi-user credential store wired into order placement nor any funds/
+     * position ledger (this codebase is single-portfolio - see the USER_ID constant), so
+     * this places through the same single configured CoinbaseOrdersClientFactoryV2/
+     * CoinbaseProperties as execute()/placeLive() do, and keeps the one piece of v1's
+     * validation that translates cleanly to what v2 actually persists: rejecting an exact
+     * duplicate of a very recent order (see isDuplicateOrder()).
+     *
+     * @param userId caller identity, logged only; not used to select credentials
+     * @param orderRequest a populated Order (symbol/side/baseSize required)
+     */
+    public Optional<Order> placeOrder(String userId, Order orderRequest) {
+        String effectiveUserId = (userId == null || userId.isBlank()) ? USER_ID : userId;
+
+        if (orderRequest.getSymbol() == null || orderRequest.getSymbol().isBlank()
+                || orderRequest.getSide() == null || orderRequest.getSide().isBlank()
+                || orderRequest.getBaseSize() <= 0) {
+            log.warn("orderService placeOrder userId={} rejected: symbol/side required and baseSize must be > 0",
+                    effectiveUserId);
+            return Optional.empty();
+        }
+
+        if (orderRequest.getClientOrderId() == null || orderRequest.getClientOrderId().isBlank()) {
+            orderRequest.setClientOrderId(UUID.randomUUID().toString());
+        }
+        if (orderRequest.getOrderType() == null || orderRequest.getOrderType().isBlank()) {
+            orderRequest.setOrderType(OrderConstants.ORDER_TYPE_MARKET);
+        }
+        if (orderRequest.getCreatedAtNs() == 0) {
+            orderRequest.setCreatedAtNs(System.nanoTime());
+        }
+        if (orderRequest.getCreatedAt() == null) {
+            orderRequest.setCreatedAt(LocalDateTime.now(ZoneId.of("America/New_York")));
+        }
+
+        if (isDuplicateOrder(orderRequest)) {
+            log.warn("orderService placeOrder userId={} symbol={} side={} baseSize={} rejected: duplicate of a recent order",
+                    effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
+            return Optional.empty();
+        }
+
+        log.info("orderService placeOrder userId={} symbol={} side={} baseSize={} (live-enabled={})",
+                effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize(), liveEnabled);
+
+        if (!liveEnabled) {
+            orderRequest.setDryRun(true);
+            orderRequest.setStatus(OrderStatus.DRY_RUN);
+            orderRepository.save(orderRequest);
+            log.info("orderService DRY-RUN symbol={} side={} baseSize={} (live-enabled=false)",
+                    orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
+            return Optional.of(orderRequest);
+        }
+
+        orderRequest.setDryRun(false);
+        return Optional.of(placeLive(orderRequest));
+    }
+
+    /**
+     * True if an order for the same symbol/side/baseSize was already placed within the
+     * current minute, per v1 OrderHelper.isDuplicateOrder (ported: same guard, adapted to
+     * v2's Order/OrderRepository - v1 compared against its own per-product order history
+     * the same way).
+     */
+    private boolean isDuplicateOrder(Order orderRequest) {
+        LocalDateTime now = LocalDateTime.now(ZoneId.of("America/New_York"));
+        return orderRepository.findBySymbolOrderByCreatedAtDesc(orderRequest.getSymbol()).stream()
+                .filter(o -> orderRequest.getSide().equalsIgnoreCase(o.getSide())
+                        && o.getBaseSize() == orderRequest.getBaseSize())
+                .map(Order::getCreatedAt)
+                .filter(Objects::nonNull)
+                .anyMatch(createdAt -> createdAt.getYear() == now.getYear()
+                        && createdAt.getDayOfYear() == now.getDayOfYear()
+                        && createdAt.getHour() == now.getHour()
+                        && createdAt.getMinute() == now.getMinute());
     }
 
     private Order placeLive(Order order) {

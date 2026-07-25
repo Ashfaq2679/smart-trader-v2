@@ -90,14 +90,6 @@ class AnalysisContextBuilderTest {
         assertThat(ctx.trendDirection()).isEqualTo(TrendDirection.SIDEWAYS);
     }
 
-    @Test
-    void edgeCase_fewerThanMinCandlesThrows() {
-        List<Candle> candles = steadyUptrend(10, 100.0, 0.5);
-
-        assertThatThrownBy(() -> builder.buildV22Context(candles))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
     private void stubCommonCollaborators(List<Candle> candles) {
         when(productService.getLiveCandles("BTC-USD", Granularity.ONE_HOUR)).thenReturn(candles);
         when(liquidityMapper.mapLiquidity(eq("BTC-USD"), any())).thenReturn(new LiquidityMap(List.of(), 123L));

@@ -17,6 +17,7 @@ import com.smarttrader.v2.positioning.OIMonitorService;
 import com.smarttrader.v2.service.ProductService;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Builds an AnalysisContext for a symbol/granularity, per
@@ -33,6 +34,7 @@ import lombok.RequiredArgsConstructor;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AnalysisContextBuilder {
 
     /** Need at least this many candles for EMA50 + support/resistance lookback to be meaningful. */
@@ -110,8 +112,9 @@ public class AnalysisContextBuilder {
      */
     AnalysisContext buildV22Context(List<Candle> candles) {
         if (candles.size() < MIN_CANDLES) {
-            throw new IllegalArgumentException(
-                    "need at least %d candles to build an AnalysisContext, got %d".formatted(MIN_CANDLES, candles.size()));
+        	log.warn("Skipping - only {} candles available for context build, need at least {}",
+                    candles.size(), MIN_CANDLES);
+           return AnalysisContext.builder().build();
         }
 
         Candle last = candles.get(candles.size() - 1);

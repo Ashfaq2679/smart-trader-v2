@@ -16,7 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.smarttrader.v2.client.CoinbaseClient;
-import com.smarttrader.v2.client.CoinbaseClientFactory;
+import com.smarttrader.v2.client.CoinbaseClientFactoryV2;
 import com.smarttrader.v2.client.Granularity;
 import com.smarttrader.v2.model.Candle;
 import com.smarttrader.v2.repository.ProductRepository;
@@ -25,7 +25,7 @@ import com.smarttrader.v2.repository.ProductRepository;
 class ProductServiceTest {
 
     @Mock
-    private CoinbaseClientFactory coinbaseClientFactory;
+    private CoinbaseClientFactoryV2 coinbaseClientFactory;
 
     @Mock
     private CoinbaseClient coinbaseClient;
