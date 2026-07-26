@@ -3,20 +3,24 @@ package com.smarttrader.v2.execution;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.coinbase.advanced.client.CoinbaseAdvancedClient;
 import com.coinbase.advanced.errors.CoinbaseAdvancedException;
+import com.coinbase.advanced.factory.CoinbaseAdvancedServiceFactory;
 import com.coinbase.advanced.model.orders.CreateOrderRequest;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
 import com.coinbase.advanced.model.orders.MarketIoc;
 import com.coinbase.advanced.model.orders.OrderConfiguration;
 import com.coinbase.advanced.orders.OrdersService;
-import com.smarttrader.v2.client.CoinbaseOrdersClientFactoryV2;
+import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
 import com.smarttrader.v2.constants.OrderConstants;
 import com.smarttrader.v2.event.ExecutionDegradedEvent;
@@ -41,10 +45,16 @@ import lombok.extern.slf4j.Slf4j;
  * is logged and persisted as an Order with status=DRY_RUN, nothing reaches Coinbase. This
  * is the expected, quiet default state - not a degradation, no alert.
  *
- * Once live-enabled=true, a real MARKET order is placed via the official Coinbase SDK
- * (CoinbaseOrdersClientFactoryV2). If live mode is on but can't actually place a real order
- * for any reason - missing/invalid credentials, a Coinbase rejection, an exception - that
- * IS the system moving away from its stated target, so it publishes ExecutionDegradedEvent,
+ * Once live-enabled=true, a real MARKET order is placed via smart-trader-v1's tested
+ * client-creation path: ClientService.getClientForUser(userId) resolves (building and
+ * caching on demand) a CoinbaseAdvancedClient from that user's encrypted, DB-stored
+ * credentials (CoinbaseClientFactory.buildClient(): decrypt -> CoinbaseAdvancedCredentials
+ * -> CoinbaseAdvancedClient - the official SDK's client is the only thing that can
+ * actually talk to Coinbase). An OrdersService is then resolved from that client (and
+ * cached per-client, per v1's OrderHelper.getOrderServiceFromCache) before submitting the
+ * order. If live mode is on but can't actually place a real order for any reason -
+ * missing/invalid credentials for that user, a Coinbase rejection, an exception - that IS
+ * the system moving away from its stated target, so it publishes ExecutionDegradedEvent,
  * which NotificationFacadeService renders as a BOLD banner. Silence is never the failure
  * mode here.
  */
@@ -53,13 +63,16 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class OrderService {
 
-    /** Single-portfolio system, no multi-user support yet - see placeOrder()'s javadoc. */
+    /** Identity used for scheduler-driven (TradeDecision) order placement - see execute(). */
     private static final String USER_ID = "ADMIN";
 
-    private final CoinbaseOrdersClientFactoryV2 ordersClientFactory;
+    private final ClientService clientService;
     private final CoinbaseProperties coinbaseProperties;
     private final OrderRepository orderRepository;
     private final TradingEventPublisher eventPublisher;
+
+    /** Per-client OrdersService cache, per v1's OrderHelper.getOrderServiceFromCache. */
+    private final Map<CoinbaseAdvancedClient, OrdersService> orderServiceCache = new ConcurrentHashMap<>();
 
     @Value("${smart-trader.execution.live-enabled:false}")
     private boolean liveEnabled;
@@ -98,7 +111,7 @@ public class OrderService {
         }
 
         order.setDryRun(false);
-        return Optional.of(placeLive(order));
+        return Optional.of(placeLive(order, USER_ID));
     }
 
     /**
@@ -107,17 +120,13 @@ public class OrderService {
      * same dry-run/live logic as execute() (see placeLive()'s javadoc for what "live"
      * means) rather than duplicating it.
      *
-     * Ported from smart-trader-v1's OrderService.placeOrder. v1's version routed through
-     * a per-user OrdersService cache (ClientService/CoinbaseAdvancedClient keyed by
-     * userId) and validated against a per-user funds/quantity ledger (UserService); v2 has
-     * neither a multi-user credential store wired into order placement nor any funds/
-     * position ledger (this codebase is single-portfolio - see the USER_ID constant), so
-     * this places through the same single configured CoinbaseOrdersClientFactoryV2/
-     * CoinbaseProperties as execute()/placeLive() do, and keeps the one piece of v1's
-     * validation that translates cleanly to what v2 actually persists: rejecting an exact
-     * duplicate of a very recent order (see isDuplicateOrder()).
+     * Ported from smart-trader-v1's OrderService.placeOrder, including its per-user
+     * client resolution (see placeLive()). Kept from v1: rejecting an exact duplicate of
+     * a very recent order (see isDuplicateOrder()). Not ported: v1's per-user funds/
+     * quantity ledger validation (UserService) - v2 has no funds/position ledger to
+     * validate against.
      *
-     * @param userId caller identity, logged only; not used to select credentials
+     * @param userId caller identity; selects which user's Coinbase credentials to use
      * @param orderRequest a populated Order (symbol/side/baseSize required)
      */
     public Optional<Order> placeOrder(String userId, Order orderRequest) {
@@ -163,7 +172,7 @@ public class OrderService {
         }
 
         orderRequest.setDryRun(false);
-        return Optional.of(placeLive(orderRequest));
+        return Optional.of(placeLive(orderRequest, effectiveUserId));
     }
 
     /**
@@ -185,11 +194,13 @@ public class OrderService {
                         && createdAt.getMinute() == now.getMinute());
     }
 
-    private Order placeLive(Order order) {
-        Optional<OrdersService> ordersService = ordersClientFactory.create();
-        if (ordersService.isEmpty()) {
+    private Order placeLive(Order order, String userId) {
+        OrdersService ordersService;
+        try {
+            ordersService = resolveOrdersService(userId);
+        } catch (Exception e) {
             return fail(order, "missing order credentials",
-                    "live-enabled=true but coinbase.api.key-name/private-key are not configured");
+                    "no Coinbase client available for user " + userId + ": " + e.getMessage());
         }
 
         try {
@@ -205,7 +216,7 @@ public class OrderService {
                     .retailPortfolioId(coinbaseProperties.portfolioId())
                     .build();
 
-            CreateOrderResponse response = ordersService.get().createOrder(request);
+            CreateOrderResponse response = ordersService.createOrder(request);
 
             if (response.isSuccess()) {
                 order.setStatus(OrderStatus.PLACED);
@@ -220,8 +231,8 @@ public class OrderService {
                 event.baseSize = order.getBaseSize();
                 eventPublisher.publish(event);
 
-                log.info("orderService LIVE order placed symbol={} side={} baseSize={} coinbaseOrderId={}",
-                        order.getSymbol(), order.getSide(), order.getBaseSize(), order.getCoinbaseOrderId());
+                log.info("orderService LIVE order placed userId={} symbol={} side={} baseSize={} coinbaseOrderId={}",
+                        userId, order.getSymbol(), order.getSide(), order.getBaseSize(), order.getCoinbaseOrderId());
                 return order;
             }
 
@@ -231,6 +242,19 @@ public class OrderService {
         } catch (Exception e) {
             return fail(order, "live order submission threw an unexpected exception", e.getMessage());
         }
+    }
+
+    /**
+     * Resolves the OrdersService for a user, per smart-trader-v1's
+     * OrderHelper.getOrderServiceFromCache - ported here since v2 has no separate
+     * OrderHelper utility class. ClientService.getClientForUser(userId) builds (on a
+     * cache miss) or reuses a cached CoinbaseAdvancedClient from that user's encrypted,
+     * DB-stored credentials; the OrdersService wrapping that client is then cached here
+     * per-client so repeated calls for the same client reuse it instead of rebuilding.
+     */
+    private OrdersService resolveOrdersService(String userId) {
+        CoinbaseAdvancedClient client = clientService.getClientForUser(userId);
+        return orderServiceCache.computeIfAbsent(client, CoinbaseAdvancedServiceFactory::createOrdersService);
     }
 
     private Order fail(Order order, String reason, String detail) {

@@ -2,23 +2,28 @@ package com.smarttrader.v2.execution;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.coinbase.advanced.client.CoinbaseAdvancedClient;
+import com.coinbase.advanced.factory.CoinbaseAdvancedServiceFactory;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
 import com.coinbase.advanced.orders.OrdersService;
-import com.smarttrader.v2.client.CoinbaseOrdersClientFactoryV2;
+import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
 import com.smarttrader.v2.event.ExecutionDegradedEvent;
 import com.smarttrader.v2.event.OrderFailedEvent;
@@ -37,7 +42,7 @@ import com.smarttrader.v2.model.TradeDirection;
 class OrderServiceTest {
 
     @Mock
-    private CoinbaseOrdersClientFactoryV2 ordersClientFactory;
+    private ClientService clientService;
 
     @Mock
     private OrderRepository orderRepository;
@@ -46,15 +51,33 @@ class OrderServiceTest {
     private TradingEventPublisher eventPublisher;
 
     @Mock
+    private CoinbaseAdvancedClient coinbaseAdvancedClient;
+
+    @Mock
     private OrdersService ordersService;
 
     private static final CoinbaseProperties PROPERTIES =
             new CoinbaseProperties("https://api.coinbase.com", "", "", "key", "pem", "portfolio-1");
 
     private OrderService service(boolean liveEnabled) {
-        OrderService service = new OrderService(ordersClientFactory, PROPERTIES, orderRepository, eventPublisher);
+        OrderService service = new OrderService(clientService, PROPERTIES, orderRepository, eventPublisher);
         ReflectionTestUtils.setField(service, "liveEnabled", liveEnabled);
         return service;
+    }
+
+    /**
+     * Stubs the same per-user client-creation path production code uses (see
+     * OrderService.resolveOrdersService()): ClientService.getClientForUser(userId) ->
+     * CoinbaseAdvancedClient -> CoinbaseAdvancedServiceFactory.createOrdersService(client).
+     * The factory call is static (ported from smart-trader-v1's OrderHelper), so it's
+     * mocked via Mockito's static mocking rather than an injectable seam.
+     */
+    private MockedStatic<CoinbaseAdvancedServiceFactory> stubOrdersServiceResolution(String userId) {
+        when(clientService.getClientForUser(userId)).thenReturn(coinbaseAdvancedClient);
+        MockedStatic<CoinbaseAdvancedServiceFactory> factory = mockStatic(CoinbaseAdvancedServiceFactory.class);
+        factory.when(() -> CoinbaseAdvancedServiceFactory.createOrdersService(coinbaseAdvancedClient))
+                .thenReturn(ordersService);
+        return factory;
     }
 
     private TradeDecision approvedLong() {
@@ -103,23 +126,24 @@ class OrderServiceTest {
         assertThat(result.get().getSide()).isEqualTo("BUY");
         assertThat(result.get().getBaseSize()).isEqualTo(1.5);
         verify(orderRepository).save(any());
-        verifyNoInteractions(ordersClientFactory, eventPublisher);
+        verifyNoInteractions(clientService, eventPublisher);
     }
 
     @Test
     void bullish_liveOrderPlacedSuccessfullyPublishesOrderPlacedEvent() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(ordersClientFactory.create()).thenReturn(Optional.of(ordersService));
         CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-123").build();
         when(ordersService.createOrder(any())).thenReturn(response);
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
-        assertThat(result.get().getCoinbaseOrderId()).isEqualTo("cb-123");
-        assertThat(result.get().isDryRun()).isFalse();
+            assertThat(result).isPresent();
+            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
+            assertThat(result.get().getCoinbaseOrderId()).isEqualTo("cb-123");
+            assertThat(result.get().isDryRun()).isFalse();
+        }
 
         ArgumentCaptor<TradingEvent> captor = ArgumentCaptor.forClass(TradingEvent.class);
         verify(eventPublisher, times(1)).publish(captor.capture());
@@ -130,7 +154,8 @@ class OrderServiceTest {
     void bearish_liveModeWithoutCredentialsFailsAndRaisesBoldAlert() {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(ordersClientFactory.create()).thenReturn(Optional.empty());
+        when(clientService.getClientForUser("ADMIN"))
+                .thenThrow(new IllegalArgumentException("No credentials found for user: ADMIN"));
 
         Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
@@ -147,15 +172,16 @@ class OrderServiceTest {
     void bearish_coinbaseRejectionFailsAndRaisesBoldAlert() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(ordersClientFactory.create()).thenReturn(Optional.of(ordersService));
         CreateOrderResponse response = new CreateOrderResponse.Builder().success(false).failureReason("insufficient funds").build();
         when(ordersService.createOrder(any())).thenReturn(response);
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
-        assertThat(result.get().getFailureReason()).isEqualTo("insufficient funds");
+            assertThat(result).isPresent();
+            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
+            assertThat(result.get().getFailureReason()).isEqualTo("insufficient funds");
+        }
         verify(eventPublisher, times(2)).publish(any());
     }
 
@@ -163,14 +189,15 @@ class OrderServiceTest {
     void edgeCase_unexpectedExceptionDuringSubmissionFailsAndRaisesBoldAlert() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(ordersClientFactory.create()).thenReturn(Optional.of(ordersService));
         when(ordersService.createOrder(any())).thenThrow(new RuntimeException("network timeout"));
 
-        Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
-        assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
+            assertThat(result).isPresent();
+            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
+            assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
+        }
         verify(eventPublisher, times(2)).publish(any());
     }
 
@@ -182,7 +209,7 @@ class OrderServiceTest {
     void bullish_placeOrderDryRunPersistsOrderForGivenUser() {
         OrderService service = service(false);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of());
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
 
         Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
 
@@ -191,7 +218,24 @@ class OrderServiceTest {
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.DRY_RUN);
         assertThat(result.get().getClientOrderId()).isNotBlank();
         assertThat(result.get().getOrderType()).isEqualTo("MARKET");
-        verifyNoInteractions(ordersClientFactory, eventPublisher);
+        verifyNoInteractions(clientService, eventPublisher);
+    }
+
+    @Test
+    void bullish_placeOrderLiveResolvesCredentialsForTheGivenUserNotAdmin() throws Exception {
+        OrderService service = service(true);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-456").build();
+        when(ordersService.createOrder(any())).thenReturn(response);
+
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("trader-1")) {
+            Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
+
+            assertThat(result).isPresent();
+            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
+        }
+        verify(clientService).getClientForUser("trader-1");
     }
 
     @Test
@@ -201,7 +245,7 @@ class OrderServiceTest {
         Optional<Order> result = service.placeOrder("trader-1", manualOrder(null, 2.0));
 
         assertThat(result).isEmpty();
-        verifyNoInteractions(orderRepository, eventPublisher, ordersClientFactory);
+        verifyNoInteractions(orderRepository, eventPublisher, clientService);
     }
 
     @Test
@@ -211,7 +255,7 @@ class OrderServiceTest {
         Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 0.0));
 
         assertThat(result).isEmpty();
-        verifyNoInteractions(orderRepository, eventPublisher, ordersClientFactory);
+        verifyNoInteractions(orderRepository, eventPublisher, clientService);
     }
 
     @Test
@@ -221,7 +265,7 @@ class OrderServiceTest {
                 .symbol("BTC-USD").side("BUY").baseSize(2.0)
                 .createdAt(java.time.LocalDateTime.now(java.time.ZoneId.of("America/New_York")))
                 .build();
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of(recent));
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of(recent));
 
         Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
 
@@ -233,7 +277,7 @@ class OrderServiceTest {
     void edgeCase_placeOrderWithNullUserIdFallsBackToDefaultUser() {
         OrderService service = service(false);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(java.util.List.of());
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
 
         Optional<Order> result = service.placeOrder(null, manualOrder("SELL", 1.0));
 
