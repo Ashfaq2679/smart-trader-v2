@@ -64,6 +64,8 @@ public class Order {
     private String failureReason;
 
     private long createdAtNs;
+    
+    private Double qty;
 
     @Indexed
     private LocalDateTime createdAt;

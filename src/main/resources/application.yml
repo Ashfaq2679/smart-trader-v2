@@ -21,8 +21,8 @@ coinbase:
     # endpoints). Candles keep using bearer-token/the public endpoint above - these are
     # unrelated credentials. private-key is the PEM-encoded EC private key; keep it out
     # of source control, source it from env/secret manager only.
-    key-name: ${COINBASE_API_KEY_NAME:}
-    private-key: ${COINBASE_API_PRIVATE_KEY:}
+    key-name: ${COINBASE_API_KEY_NAME:}         # NOT in use
+    private-key: ${COINBASE_API_PRIVATE_KEY:}   # NOT in use
     portfolio-id: ${COINBASE_PORTFOLIO_ID:}
 
 # v2.5 feature configuration, per V2_5_IMPLEMENTATION_PLAN_INCREMENTAL.md section 0.6.

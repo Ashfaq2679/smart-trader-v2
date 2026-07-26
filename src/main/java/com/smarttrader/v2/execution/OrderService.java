@@ -1,9 +1,16 @@
 package com.smarttrader.v2.execution;
 
+import static com.smarttrader.v2.constants.OrderConstants.MAX_USD_PER_ORDER;
+import static com.smarttrader.v2.constants.OrderConstants.ORDER_TYPE_MARKET;
+import static com.smarttrader.v2.constants.OrderConstants.SIDE_BUY;
+import static com.smarttrader.v2.constants.OrderConstants.SIDE_SELL;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -18,10 +25,12 @@ import com.coinbase.advanced.errors.CoinbaseAdvancedException;
 import com.coinbase.advanced.factory.CoinbaseAdvancedServiceFactory;
 import com.coinbase.advanced.model.orders.CreateOrderRequest;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
+import com.coinbase.advanced.model.orders.LimitGtc;
 import com.coinbase.advanced.model.orders.MarketIoc;
 import com.coinbase.advanced.model.orders.OrderConfiguration;
 import com.coinbase.advanced.model.orders.TriggerGtc;
 import com.coinbase.advanced.orders.OrdersService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
 import com.smarttrader.v2.constants.OrderConstants;
@@ -31,6 +40,7 @@ import com.smarttrader.v2.event.OrderPlacedEvent;
 import com.smarttrader.v2.event.TradingEventPublisher;
 import com.smarttrader.v2.model.AnalysisContext;
 import com.smarttrader.v2.model.Order;
+import com.smarttrader.v2.model.OrderRequest;
 import com.smarttrader.v2.model.OrderStatus;
 import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.model.TradeDirection;
@@ -89,6 +99,17 @@ public class OrderService {
             log.warn("orderService symbol={} approved decision has direction=NONE, nothing to place", symbol);
             return Optional.empty();
         }
+        
+        OrderRequest orderRequest = OrderRequest.builder()
+				.productId(symbol)
+				.side(side)
+				.orderType("LIMIT")
+				.baseSize(decision.positionSize())
+				.limitPrice(decision.signal().entry())
+				//.stopLoss(decision.signal().stop())
+				//.takeProfit(decision.signal().target())
+				.entryPriceNum(decision.signal().entry())
+				.build();
 
         Order order = Order.builder()
                 .symbol(symbol)
@@ -116,7 +137,7 @@ public class OrderService {
         }
 
         order.setDryRun(false);
-        return Optional.of(placeLive(order, USER_ID));
+        return Optional.of(placeLive(orderRequest, decision, ctx, USER_ID));
     }
 
     /**
@@ -134,51 +155,51 @@ public class OrderService {
      * @param userId caller identity; selects which user's Coinbase credentials to use
      * @param orderRequest a populated Order (symbol/side/baseSize required)
      */
-    public Optional<Order> placeOrder(String userId, Order orderRequest) {
-        String effectiveUserId = (userId == null || userId.isBlank()) ? USER_ID : userId;
-
-        if (orderRequest.getSymbol() == null || orderRequest.getSymbol().isBlank()
-                || orderRequest.getSide() == null || orderRequest.getSide().isBlank()
-                || orderRequest.getBaseSize() <= 0) {
-            log.warn("orderService placeOrder userId={} rejected: symbol/side required and baseSize must be > 0",
-                    effectiveUserId);
-            return Optional.empty();
-        }
-
-        if (orderRequest.getClientOrderId() == null || orderRequest.getClientOrderId().isBlank()) {
-            orderRequest.setClientOrderId(UUID.randomUUID().toString());
-        }
-        if (orderRequest.getOrderType() == null || orderRequest.getOrderType().isBlank()) {
-            orderRequest.setOrderType(OrderConstants.ORDER_TYPE_MARKET);
-        }
-        if (orderRequest.getCreatedAtNs() == 0) {
-            orderRequest.setCreatedAtNs(System.nanoTime());
-        }
-        if (orderRequest.getCreatedAt() == null) {
-            orderRequest.setCreatedAt(LocalDateTime.now(ZoneId.of("America/New_York")));
-        }
-
-        if (isDuplicateOrder(orderRequest)) {
-            log.warn("orderService placeOrder userId={} symbol={} side={} baseSize={} rejected: duplicate of a recent order",
-                    effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
-            return Optional.empty();
-        }
-
-        log.info("orderService placeOrder userId={} symbol={} side={} baseSize={} (live-enabled={})",
-                effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize(), liveEnabled);
-
-        if (!liveEnabled) {
-            orderRequest.setDryRun(true);
-            orderRequest.setStatus(OrderStatus.DRY_RUN);
-            orderRepository.save(orderRequest);
-            log.info("orderService DRY-RUN symbol={} side={} baseSize={} (live-enabled=false)",
-                    orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
-            return Optional.of(orderRequest);
-        }
-
-        orderRequest.setDryRun(false);
-        return Optional.of(placeLive(orderRequest, effectiveUserId));
-    }
+//    public Optional<Order> placeOrder(String userId, Order orderRequest, TradeDecision decision, AnalysisContext ctx) {
+//        String effectiveUserId = (userId == null || userId.isBlank()) ? USER_ID : userId;
+//
+//        if (orderRequest.getSymbol() == null || orderRequest.getSymbol().isBlank()
+//                || orderRequest.getSide() == null || orderRequest.getSide().isBlank()
+//                || orderRequest.getBaseSize() <= 0) {
+//            log.warn("orderService placeOrder userId={} rejected: symbol/side required and baseSize must be > 0",
+//                    effectiveUserId);
+//            return Optional.empty();
+//        }
+//
+//        if (orderRequest.getClientOrderId() == null || orderRequest.getClientOrderId().isBlank()) {
+//            orderRequest.setClientOrderId(UUID.randomUUID().toString());
+//        }
+//        if (orderRequest.getOrderType() == null || orderRequest.getOrderType().isBlank()) {
+//            orderRequest.setOrderType(OrderConstants.ORDER_TYPE_MARKET);
+//        }
+//        if (orderRequest.getCreatedAtNs() == 0) {
+//            orderRequest.setCreatedAtNs(System.nanoTime());
+//        }
+//        if (orderRequest.getCreatedAt() == null) {
+//            orderRequest.setCreatedAt(LocalDateTime.now(ZoneId.of("America/New_York")));
+//        }
+//
+//        if (isDuplicateOrder(orderRequest)) {
+//            log.warn("orderService placeOrder userId={} symbol={} side={} baseSize={} rejected: duplicate of a recent order",
+//                    effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
+//            return Optional.empty();
+//        }
+//
+//        log.info("orderService placeOrder userId={} symbol={} side={} baseSize={} (live-enabled={})",
+//                effectiveUserId, orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize(), liveEnabled);
+//
+//        if (!liveEnabled) {
+//            orderRequest.setDryRun(true);
+//            orderRequest.setStatus(OrderStatus.DRY_RUN);
+//            orderRepository.save(orderRequest);
+//            log.info("orderService DRY-RUN symbol={} side={} baseSize={} (live-enabled=false)",
+//                    orderRequest.getSymbol(), orderRequest.getSide(), orderRequest.getBaseSize());
+//            return Optional.of(orderRequest);
+//        }
+//
+//        orderRequest.setDryRun(false);
+//        return Optional.of(placeLive(orderRequest, decision, ctx, effectiveUserId));
+//    }
 
     /**
      * True if an order for the same symbol/side/baseSize was already placed within the
@@ -199,8 +220,24 @@ public class OrderService {
                         && createdAt.getMinute() == now.getMinute());
     }
 
-    private Order placeLive(Order order, String userId) {
+    private Order placeLive(OrderRequest orderRequest, TradeDecision decision, AnalysisContext ctx, String userId) {
         OrdersService ordersService;
+        
+        Order order = Order.builder()
+                .symbol(orderRequest.getProductId())
+                .side(orderRequest.getSide())
+                .orderType(OrderConstants.ORDER_TYPE_MARKET)
+                .baseSize(decision.positionSize())
+                .entryPrice(decision.signal().entry())
+                .stopPrice(decision.signal().stop())
+                .targetPrice(decision.signal().target())
+                .clientOrderId(UUID.randomUUID().toString())
+                .strategyName(decision.signal().strategyName())
+                .regime(decision.regime())
+                .createdAtNs(System.nanoTime())
+                .createdAt(LocalDateTime.now(ZoneId.of("America/New_York")))
+                .analysisContext(ctx)
+                .build();
         try {
             ordersService = resolveOrdersService(userId);
         } catch (Exception e) {
@@ -213,10 +250,11 @@ public class OrderService {
                     .productId(order.getSymbol())
                     .side(order.getSide())
                     .clientOrderId(order.getClientOrderId())
-                    .orderConfiguration(buildOrderConfiguration(order))
+                    .orderConfiguration(buildOrderConfiguration(orderRequest))
                     .retailPortfolioId(coinbaseProperties.portfolioId())
                     .build();
-
+            
+            log.info("Submitting LIVE order {}", new ObjectMapper().writeValueAsString(request));
             CreateOrderResponse response = ordersService.createOrder(request);
 
             if (response.isSuccess()) {
@@ -237,12 +275,73 @@ public class OrderService {
                 return order;
             }
 
-            return fail(order, "live order rejected by Coinbase", response.getFailureReason());
+            return fail(order, "live order rejected by Coinbase", response.getErrorResponse() != null ? response.getErrorResponse().getMessage() : "unknown error");
         } catch (CoinbaseAdvancedException e) {
             return fail(order, "live order submission failed (Coinbase API error)", e.getMessage());
         } catch (Exception e) {
             return fail(order, "live order submission threw an unexpected exception", e.getMessage());
         }
+    } 
+    
+    
+    private OrderConfiguration buildOrderConfiguration(OrderRequest request) {
+
+		String orderType = request.getOrderType().toUpperCase();
+		Double baseSize = request.getBaseSize();
+
+		if (ORDER_TYPE_MARKET.equals(orderType)) {
+			MarketIoc.Builder marketBuilder = new MarketIoc.Builder();
+			if (request.getBaseSize() != null && request.getBaseSize() > 0) {
+				marketBuilder.baseSize(toPlainString(request.getBaseSize(), 3));
+			} else {
+				marketBuilder.quoteSize(toPlainString(request.getQuoteSize(),3));
+			}
+			return new OrderConfiguration.Builder()
+					.marketMarketIoc(marketBuilder.build())
+					.build();
+		} else if (request.getStopLoss() != null && request.getTakeProfit() != null) {
+			return new OrderConfiguration.Builder()
+					.triggerBracketGtc(new TriggerGtc.Builder()
+							.baseSize(toPlainString(baseSize, 3))
+							.limitPrice(String.format("%.2f", request.getTakeProfit()))
+							.stopTriggerPrice(String.format("%.2f", request.getStopLoss()))
+							.build())
+					.build();
+		} else {
+			Double limitPrice = request.getLimitPrice();
+			// find 0.5% of limit price and subtract from limit price to set as stop price,
+			// this is to make sure the post only orders won't fail.
+			if (request.getSide().equalsIgnoreCase(SIDE_SELL)) {
+				limitPrice = request.getLimitPrice() + (request.getLimitPrice() * 0.005);
+				Double availableQty = findAvailableQtyForProduct(orderRepository, request.getProductId());
+				if (availableQty != null && availableQty > 0 && request.getBaseSize() > availableQty) {
+					log.info("Adjusting sell order quantity from {} to {} for product: {} based on available quantity.",
+							request.getBaseSize(), availableQty, request.getProductId());
+					 baseSize = availableQty;
+				}
+			} else {
+				limitPrice = request.getLimitPrice() - (request.getLimitPrice() * 0.001);
+				// Adjust qty i.e baseSize to MAX_USD_PER_ORDER if order value exceeds max allowed per order.
+				double orderValue = request.getBaseSize() * request.getLimitPrice();
+				// Always keep order value as 50$.
+				baseSize = 50.00/(request.getBaseSize()!=null?request.getBaseSize():1.0);
+			
+				if (baseSize > MAX_USD_PER_ORDER) {
+					double adjustedBaseSize = Math.floor(MAX_USD_PER_ORDER / request.getLimitPrice() * 1e8) / 1e8; // avoid floating precision
+					log.info("Adjusting buy order quantity from {} to {} for product: {} to enforce max order value of ${}.",
+							request.getBaseSize(), adjustedBaseSize, request.getProductId(), MAX_USD_PER_ORDER);
+					baseSize = adjustedBaseSize;
+				}
+			}
+			LimitGtc limitGtc = new LimitGtc.Builder()
+					.baseSize(toPlainString(baseSize, 3))
+					.limitPrice(String.format("%.2f", limitPrice))	//Must be a string with 2 decimal places to avoid CoinBase API validation error.
+					.postOnly(true)
+					.build(); 
+			return new OrderConfiguration.Builder()
+					.limitLimitGtc(limitGtc)
+					.build(); 
+		}
     }
 
     /**
@@ -261,29 +360,29 @@ public class OrderService {
      * available and sane - e.g. placeOrder()'s manual path, which doesn't carry strategy
      * levels - rather than sending Coinbase a fabricated or malformed bracket.
      */
-    private OrderConfiguration buildOrderConfiguration(Order order) {
+    private OrderConfiguration buildOrderConfiguration_claude(Order order) {
         Double stop = order.getStopPrice();
         Double target = order.getTargetPrice();
 
-        if (stop == null || target == null || stop <= 0 || target <= 0 || !sanityCheckBracket(order)) {
+//        if (stop == null || target == null || stop <= 0 || target <= 0 || !sanityCheckBracket(order)) {
             log.info("orderService symbol={} side={} no usable stop/target levels, placing a plain MARKET order",
                     order.getSymbol(), order.getSide());
             return new OrderConfiguration.Builder()
                     .marketMarketIoc(new MarketIoc.Builder()
-                            .baseSize(toPlainString(order.getBaseSize()))
+                            .baseSize(toPlainString(order.getBaseSize(),3))
                             .build())
                     .build();
-        }
+//        }
 
-        log.info("orderService symbol={} side={} bracket stopTriggerPrice={} limitPrice={} (minimizing loss / locking gain)",
-                order.getSymbol(), order.getSide(), toPlainString(stop), toPlainString(target));
-        return new OrderConfiguration.Builder()
-                .triggerBracketGtc(new TriggerGtc.Builder()
-                        .baseSize(toPlainString(order.getBaseSize()))
-                        .limitPrice(toPlainString(target))
-                        .stopTriggerPrice(toPlainString(stop))
-                        .build())
-                .build();
+//        log.info("orderService symbol={} side={} bracket stopTriggerPrice={} limitPrice={} (minimizing loss / locking gain)",
+//                order.getSymbol(), order.getSide(), toPlainString(stop), toPlainString(target));
+//        return new OrderConfiguration.Builder()
+//                .triggerBracketGtc(new TriggerGtc.Builder()
+//                        .baseSize(toPlainString(order.getBaseSize()))
+//                        .limitPrice(toPlainString(target))
+//                        .stopTriggerPrice(toPlainString(stop))
+//                        .build())
+//                .build();
     }
 
     /**
@@ -354,7 +453,145 @@ public class OrderService {
         };
     }
 
-    private String toPlainString(double value) {
-        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).toPlainString();
+    private String toPlainString(double value, int scale) {
+        return BigDecimal.valueOf(value).setScale(scale, RoundingMode.HALF_UP).toPlainString();
     }
+    
+	private static Double findAvailableQtyForProduct(OrderRepository orderRepository, String productId) {
+		Map<String, Double> result = getQtyBySideFromCache(orderRepository, productId);
+		double buyQty = result.get(SIDE_BUY);
+		double sellQty = result.get(SIDE_SELL);
+		return buyQty - sellQty;
+	}
+	
+	public static Map<String, Double> getQtyBySideFromCache(OrderRepository orderRepository, String productId) {
+		Map<String, Double> result = new HashMap<>();
+		List<Order> orders = orderRepository.findBySymbolOrderByCreatedAtDesc(productId);
+		double buy = orders.stream().filter(o -> SIDE_BUY.equalsIgnoreCase(o.getSide())).mapToDouble(Order::getQty)
+				.sum();
+		double sell = orders.stream().filter(o -> SIDE_SELL.equalsIgnoreCase(o.getSide())).mapToDouble(Order::getQty)
+				.sum();
+		result.put(SIDE_BUY, buy);
+		result.put(SIDE_SELL, sell);
+		return result;
+	}
+    
+//  private Order placeLive(Order order, String userId) {
+//  final OrdersService ordersService;
+//
+//  try {
+//      ordersService = resolveOrdersService(userId);
+//  } catch (Exception e) {
+//      return fail(
+//              order,
+//              "missing order credentials",
+//              "no Coinbase client available for user " + userId + ": " + e.getMessage()
+//      );
+//  }
+//
+//  try {
+//      BuiltOrderConfigurations configurations =
+//              OrderHelper.buildOrderConfigurations(order, orderRepository);
+//
+//      CreateOrderRequest.Builder requestBuilder = new CreateOrderRequest.Builder()
+//              .productId(order.getSymbol())
+//              .side(order.getSide())
+//              .clientOrderId(order.getClientOrderId())
+//              .orderConfiguration(configurations.primary())
+//              .retailPortfolioId(coinbaseProperties.portfolioId());
+//
+//      if (configurations.attached() != null) {
+//          requestBuilder.attachedOrderConfiguration(configurations.attached());
+//      }
+//
+//      /*
+//       * Set these only for derivative products when applicable.
+//       *
+//       * requestBuilder
+//       *     .leverage(order.getLeverage())
+//       *     .marginType(order.getMarginType());
+//       */
+//
+//      CreateOrderRequest request = requestBuilder.build();
+//
+//      log.info(
+//              "Submitting LIVE order userId={} symbol={} side={} type={} baseSize={} quoteSize={} " +
+//                      "limitPrice={} takeProfit={} stopLoss={} hasAttachedBracket={}",
+//              userId,
+//              order.getSymbol(),
+//              order.getSide(),
+//              order.getOrderType(),
+//              order.getBaseSize(),
+//              order.getQuoteSize(),
+//              order.getLimitPrice(),
+//              order.getTakeProfit(),
+//              order.getStopLoss(),
+//              configurations.attached() != null
+//      );
+//
+//      CreateOrderResponse response = ordersService.createOrder(request);
+//
+//      if (!response.isSuccess()) {
+//          return fail(
+//                  order,
+//                  "live order rejected by Coinbase",
+//                  response.getFailureReason()
+//          );
+//      }
+//
+//      order.setStatus(OrderStatus.PLACED);
+//      order.setCoinbaseOrderId(response.getOrderId());
+//      Order savedOrder = orderRepository.save(order);
+//
+//      OrderPlacedEvent event = new OrderPlacedEvent();
+//      event.symbol = savedOrder.getSymbol();
+//      event.orderId = savedOrder.getId();
+//      event.coinbaseOrderId = savedOrder.getCoinbaseOrderId();
+//      event.side = savedOrder.getSide();
+//      event.baseSize = savedOrder.getBaseSize();
+//
+//      eventPublisher.publish(event);
+//
+//      log.info(
+//              "LIVE order placed userId={} symbol={} side={} baseSize={} coinbaseOrderId={}",
+//              userId,
+//              savedOrder.getSymbol(),
+//              savedOrder.getSide(),
+//              savedOrder.getBaseSize(),
+//              savedOrder.getCoinbaseOrderId()
+//      );
+//
+//      return savedOrder;
+//
+//  } catch (CoinbaseAdvancedException e) {
+//      log.error(
+//              "Coinbase rejected LIVE order userId={} symbol={} side={}",
+//              userId,
+//              order.getSymbol(),
+//              order.getSide(),
+//              e
+//      );
+//
+//      return fail(
+//              order,
+//              "live order submission failed (Coinbase API error)",
+//              e.getMessage()
+//      );
+//
+//  } catch (Exception e) {
+//      log.error(
+//              "Unexpected LIVE order failure userId={} symbol={} side={}",
+//              userId,
+//              order.getSymbol(),
+//              order.getSide(),
+//              e
+//      );
+//
+//      return fail(
+//              order,
+//              "live order submission threw an unexpected exception",
+//              e.getMessage()
+//      );
+//  }
+//}
 }

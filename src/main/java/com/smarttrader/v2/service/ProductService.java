@@ -52,6 +52,7 @@ public class ProductService {
 	public List<String> findProductIdToProcess() {
 		log.info("Finding product IDs to process, ignoring: {}", ignoreProductIds);
 		List<String> productIds = productRepository.findAll().stream()
+				//.filter(coin -> coin.productId().endsWith("-USDC") )
 				.filter(coin -> coin.productId() != null
 						&& (ignoreProductIds == null || !ignoreProductIds.contains(coin.productId())))
 				.map(coin -> coin.productId()).toList();
