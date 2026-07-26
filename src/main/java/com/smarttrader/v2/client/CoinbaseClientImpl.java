@@ -45,7 +45,7 @@ class CoinbaseClientImpl implements CoinbaseClient {
             if (!isTooManyRequests(e) && !isTooManyRequests(e.getCause())) {
                 throw e;
             }
-            log.error("coinbaseClient productId={} granularity={} rate-limited (429) after {} retries, "
+            log.error("CoinbaseClient productId={} granularity={} rate-limited (429) after {} retries, "
                             + "giving up for this poll - returning no candles",
                     productId, granularity, rateLimitMaxRetries);
             return List.of();
