@@ -23,8 +23,9 @@ import com.coinbase.advanced.client.CoinbaseAdvancedClient;
 import com.coinbase.advanced.factory.CoinbaseAdvancedServiceFactory;
 import com.coinbase.advanced.model.orders.CreateOrderRequest;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
+import com.coinbase.advanced.model.orders.ErrorResponse;
+import com.coinbase.advanced.model.orders.LimitGtc;
 import com.coinbase.advanced.model.orders.OrderConfiguration;
-import com.coinbase.advanced.model.orders.TriggerGtc;
 import com.coinbase.advanced.orders.OrdersService;
 import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
@@ -41,8 +42,17 @@ import com.smarttrader.v2.model.SignalResult;
 import com.smarttrader.v2.model.TradeDecision;
 import com.smarttrader.v2.model.TradeDirection;
 
+/**
+ * Covers OrderService as it's actually wired today: execute() always builds a LIMIT,
+ * post-only order (orderType is hardcoded "LIMIT" and stopLoss/takeProfit are not set),
+ * sized to exactly OrderConstants.FIXED_ORDER_VALUE_USD regardless of what RiskEngine's
+ * positionSize() computed. placeOrder() is currently commented out in OrderService, so
+ * it has no tests here - re-add them if/when it's re-enabled.
+ */
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
+
+    private static final double FIXED_ORDER_VALUE_USD = com.smarttrader.v2.constants.OrderConstants.FIXED_ORDER_VALUE_USD;
 
     @Mock
     private ClientService clientService;
@@ -96,6 +106,14 @@ class OrderServiceTest {
                 .signal(signal).positionSize(1.5).reason("approved").build();
     }
 
+    private TradeDecision approvedShort() {
+        SignalResult signal = SignalResult.builder()
+                .valid(true).strategyName("ShortSideStrategy").direction(TradeDirection.SHORT)
+                .entry(100.0).stop(105.0).target(90.0).riskReward(2.0).build();
+        return TradeDecision.builder().approved(true).regime(MarketRegime.PANIC)
+                .signal(signal).positionSize(2.0).reason("approved").build();
+    }
+
     @Test
     void bearish_unapprovedDecisionPlacesNothing() {
         OrderService service = service(false);
@@ -122,7 +140,21 @@ class OrderServiceTest {
     }
 
     @Test
-    void bullish_dryRunPersistsOrderWithoutTouchingCoinbaseOrPublishingEvents() {
+    void edgeCase_approvedDecisionWithNonPositiveEntryPricePlacesNothing() {
+        OrderService service = service(false);
+        SignalResult zeroEntrySignal = SignalResult.builder().valid(true).strategyName("PullbackStrategy")
+                .direction(TradeDirection.LONG).entry(0.0).stop(95.0).target(110.0).riskReward(2.0).build();
+        TradeDecision decision = TradeDecision.builder().approved(true).regime(MarketRegime.PULLBACK)
+                .signal(zeroEntrySignal).positionSize(1.5).reason("approved").build();
+
+        Optional<Order> result = service.execute(decision, "BTC-USD", AnalysisContext.builder().build());
+
+        assertThat(result).isEmpty();
+        verifyNoInteractions(orderRepository, eventPublisher);
+    }
+
+    @Test
+    void bullish_dryRunPersistsOrderSizedToExactlyElevenDollars() {
         OrderService service = service(false);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -132,120 +164,83 @@ class OrderServiceTest {
         assertThat(result.get().isDryRun()).isTrue();
         assertThat(result.get().getStatus()).isEqualTo(OrderStatus.DRY_RUN);
         assertThat(result.get().getSide()).isEqualTo("BUY");
-        assertThat(result.get().getBaseSize()).isEqualTo(1.5);
+        // entry=100 -> baseSize = $11 / 100 = 0.11, not RiskEngine's positionSize (1.5).
+        assertThat(result.get().getBaseSize()).isEqualTo(FIXED_ORDER_VALUE_USD / 100.0);
         verify(orderRepository).save(any());
         verifyNoInteractions(clientService, eventPublisher);
     }
 
     @Test
-    void bullish_liveOrderPlacedSuccessfullyPublishesOrderPlacedEvent() throws Exception {
+    void bullish_liveBuyOrderPlacesAPostOnlyLimitOrderSizedToElevenDollars() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-123").build();
-        when(ordersService.createOrder(any())).thenReturn(response);
-
-        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
-
-            assertThat(result).isPresent();
-            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
-            assertThat(result.get().getCoinbaseOrderId()).isEqualTo("cb-123");
-            assertThat(result.get().isDryRun()).isFalse();
-        }
-
-        ArgumentCaptor<TradingEvent> captor = ArgumentCaptor.forClass(TradingEvent.class);
-        verify(eventPublisher, times(1)).publish(captor.capture());
-        assertThat(captor.getValue()).isInstanceOf(OrderPlacedEvent.class);
-    }
-
-    @Test
-    void bullish_liveBuyOrderWithStopAndTargetPlacesATriggerBracketNotAPlainMarketOrder() throws Exception {
-        OrderService service = service(true);
-        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-1").build();
         ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
         when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
 
+        Optional<Order> result;
         try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
+            result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
         }
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
+        assertThat(result.get().getCoinbaseOrderId()).isEqualTo("cb-123");
+        assertThat(result.get().getBaseSize()).isEqualTo(FIXED_ORDER_VALUE_USD / 100.0);
 
         OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
+        LimitGtc limit = configuration.getLimitLimitGtc();
+        assertThat(limit).isNotNull();
         assertThat(configuration.getMarketMarketIoc()).isNull();
-        TriggerGtc bracket = configuration.getTriggerBracketGtc();
-        assertThat(bracket).isNotNull();
-        // approvedLong(): entry=100, stop=95, target=110 -> BUY bracket must stop below entry, limit above it.
-        assertThat(bracket.getStopTriggerPrice()).isEqualTo("95.00");
-        assertThat(bracket.getLimitPrice()).isEqualTo("110.00");
-        assertThat(bracket.getBaseSize()).isEqualTo("1.50");
+        assertThat(configuration.getTriggerBracketGtc()).isNull();
+        assertThat(limit.isPostOnly()).isTrue();
+        // entry=100, BUY nudges limitPrice down 0.1% -> 99.90; baseSize stays $11/100 = 0.110.
+        assertThat(limit.getLimitPrice()).isEqualTo("99.90");
+        assertThat(limit.getBaseSize()).isEqualTo("0.110");
+
+        ArgumentCaptor<TradingEvent> eventCaptor = ArgumentCaptor.forClass(TradingEvent.class);
+        verify(eventPublisher, times(1)).publish(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isInstanceOf(OrderPlacedEvent.class);
     }
 
     @Test
-    void bearish_liveSellOrderWithStopAndTargetOrdersBracketForTheShortDirection() throws Exception {
-        OrderService service = service(true);
-        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-2").build();
-        ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
-        when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
-
-        SignalResult shortSignal = SignalResult.builder()
-                .valid(true).strategyName("ShortSideStrategy").direction(TradeDirection.SHORT)
-                .entry(100.0).stop(105.0).target(90.0).riskReward(2.0).build();
-        TradeDecision shortDecision = TradeDecision.builder().approved(true).regime(MarketRegime.PANIC)
-                .signal(shortSignal).positionSize(2.0).reason("approved").build();
-
-        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            service.execute(shortDecision, "BTC-USD", AnalysisContext.builder().build());
-        }
-
-        TriggerGtc bracket = orderConfigurationOf(requestCaptor.getValue()).getTriggerBracketGtc();
-        assertThat(bracket).isNotNull();
-        // SELL bracket must stop above entry, limit below it.
-        assertThat(bracket.getStopTriggerPrice()).isEqualTo("105.00");
-        assertThat(bracket.getLimitPrice()).isEqualTo("90.00");
-    }
-
-    @Test
-    void edgeCase_liveOrderWithoutUsableStopTargetFallsBackToPlainMarketOrder() throws Exception {
+    void bearish_liveSellOrderNudgesLimitPriceUpAndKeepsElevenDollarSize() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-3").build();
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-456").build();
         ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
         when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
 
         try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            service.placeOrder("ADMIN", manualOrder("BUY", 1.0));
+            service.execute(approvedShort(), "BTC-USD", AnalysisContext.builder().build());
         }
 
-        OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
-        assertThat(configuration.getTriggerBracketGtc()).isNull();
-        assertThat(configuration.getMarketMarketIoc()).isNotNull();
-        assertThat(configuration.getMarketMarketIoc().getBaseSize()).isEqualTo("1.00");
+        LimitGtc limit = orderConfigurationOf(requestCaptor.getValue()).getLimitLimitGtc();
+        assertThat(limit).isNotNull();
+        // entry=100, SELL nudges limitPrice up 0.5% -> 100.50; no prior holdings recorded so
+        // the $11-derived size (0.110) isn't shrunk.
+        assertThat(limit.getLimitPrice()).isEqualTo("100.50");
+        assertThat(limit.getBaseSize()).isEqualTo("0.110");
     }
 
     @Test
-    void edgeCase_liveOrderWithSwappedStopAndTargetFallsBackToPlainMarketOrder() throws Exception {
+    void edgeCase_liveSellOrderShrinksBelowElevenDollarsWhenHoldingsAreInsufficient() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-4").build();
+        Order priorBuy = Order.builder().symbol("BTC-USD").side("BUY").qty(0.05).build();
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of(priorBuy));
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-789").build();
         ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
         when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
 
-        // A BUY with stop ABOVE target is nonsensical (would maximize loss, not minimize it).
-        SignalResult brokenSignal = SignalResult.builder()
-                .valid(true).strategyName("PullbackStrategy").direction(TradeDirection.LONG)
-                .entry(100.0).stop(110.0).target(95.0).riskReward(2.0).build();
-        TradeDecision brokenDecision = TradeDecision.builder().approved(true).regime(MarketRegime.PULLBACK)
-                .signal(brokenSignal).positionSize(1.0).reason("approved").build();
-
         try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            service.execute(brokenDecision, "BTC-USD", AnalysisContext.builder().build());
+            service.execute(approvedShort(), "BTC-USD", AnalysisContext.builder().build());
         }
 
-        OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
-        assertThat(configuration.getTriggerBracketGtc()).isNull();
-        assertThat(configuration.getMarketMarketIoc()).isNotNull();
+        // $11/100 = 0.110 wanted, but only 0.05 is actually held -> can't sell more than owned.
+        LimitGtc limit = orderConfigurationOf(requestCaptor.getValue()).getLimitLimitGtc();
+        assertThat(limit.getBaseSize()).isEqualTo("0.050");
     }
 
     @Test
@@ -270,16 +265,19 @@ class OrderServiceTest {
     void bearish_coinbaseRejectionFailsAndRaisesBoldAlert() throws Exception {
         OrderService service = service(true);
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(false).failureReason("insufficient funds").build();
+        ErrorResponse errorResponse = new ErrorResponse();
+        errorResponse.setMessage("insufficient funds");
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(false).errorResponse(errorResponse).build();
         when(ordersService.createOrder(any())).thenReturn(response);
 
+        Optional<Order> result;
         try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
-
-            assertThat(result).isPresent();
-            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
-            assertThat(result.get().getFailureReason()).isEqualTo("insufficient funds");
+            result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
         }
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
+        assertThat(result.get().getFailureReason()).isEqualTo("insufficient funds");
         verify(eventPublisher, times(2)).publish(any());
     }
 
@@ -289,97 +287,14 @@ class OrderServiceTest {
         when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(ordersService.createOrder(any())).thenThrow(new RuntimeException("network timeout"));
 
+        Optional<Order> result;
         try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
-            Optional<Order> result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
-
-            assertThat(result).isPresent();
-            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
-            assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
+            result = service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
         }
+
+        assertThat(result).isPresent();
+        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.FAILED);
+        assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
         verify(eventPublisher, times(2)).publish(any());
-    }
-
-    private Order manualOrder(String side, double baseSize) {
-        return Order.builder().symbol("BTC-USD").side(side).baseSize(baseSize).build();
-    }
-
-    @Test
-    void bullish_placeOrderDryRunPersistsOrderForGivenUser() {
-        OrderService service = service(false);
-        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
-
-        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
-
-        assertThat(result).isPresent();
-        assertThat(result.get().isDryRun()).isTrue();
-        assertThat(result.get().getStatus()).isEqualTo(OrderStatus.DRY_RUN);
-        assertThat(result.get().getClientOrderId()).isNotBlank();
-        assertThat(result.get().getOrderType()).isEqualTo("MARKET");
-        verifyNoInteractions(clientService, eventPublisher);
-    }
-
-    @Test
-    void bullish_placeOrderLiveResolvesCredentialsForTheGivenUserNotAdmin() throws Exception {
-        OrderService service = service(true);
-        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
-        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-456").build();
-        when(ordersService.createOrder(any())).thenReturn(response);
-
-        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("trader-1")) {
-            Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
-
-            assertThat(result).isPresent();
-            assertThat(result.get().getStatus()).isEqualTo(OrderStatus.PLACED);
-        }
-        verify(clientService).getClientForUser("trader-1");
-    }
-
-    @Test
-    void bearish_placeOrderWithMissingSideIsRejectedWithoutTouchingRepository() {
-        OrderService service = service(false);
-
-        Optional<Order> result = service.placeOrder("trader-1", manualOrder(null, 2.0));
-
-        assertThat(result).isEmpty();
-        verifyNoInteractions(orderRepository, eventPublisher, clientService);
-    }
-
-    @Test
-    void bearish_placeOrderWithNonPositiveBaseSizeIsRejected() {
-        OrderService service = service(false);
-
-        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 0.0));
-
-        assertThat(result).isEmpty();
-        verifyNoInteractions(orderRepository, eventPublisher, clientService);
-    }
-
-    @Test
-    void edgeCase_placeOrderRejectsAnExactDuplicateFromTheSameMinute() {
-        OrderService service = service(false);
-        Order recent = Order.builder()
-                .symbol("BTC-USD").side("BUY").baseSize(2.0)
-                .createdAt(java.time.LocalDateTime.now(java.time.ZoneId.of("America/New_York")))
-                .build();
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of(recent));
-
-        Optional<Order> result = service.placeOrder("trader-1", manualOrder("BUY", 2.0));
-
-        assertThat(result).isEmpty();
-        verify(orderRepository, times(0)).save(any());
-    }
-
-    @Test
-    void edgeCase_placeOrderWithNullUserIdFallsBackToDefaultUser() {
-        OrderService service = service(false);
-        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
-
-        Optional<Order> result = service.placeOrder(null, manualOrder("SELL", 1.0));
-
-        assertThat(result).isPresent();
-        assertThat(result.get().getSide()).isEqualTo("SELL");
     }
 }

@@ -1,6 +1,5 @@
 package com.smarttrader.v2.execution;
 
-import static com.smarttrader.v2.constants.OrderConstants.MAX_USD_PER_ORDER;
 import static com.smarttrader.v2.constants.OrderConstants.ORDER_TYPE_MARKET;
 import static com.smarttrader.v2.constants.OrderConstants.SIDE_BUY;
 import static com.smarttrader.v2.constants.OrderConstants.SIDE_SELL;
@@ -99,12 +98,22 @@ public class OrderService {
             log.warn("orderService symbol={} approved decision has direction=NONE, nothing to place", symbol);
             return Optional.empty();
         }
-        
+
+        double entryPrice = decision.signal().entry();
+        if (entryPrice <= 0) {
+            log.warn("orderService symbol={} approved decision has entry price {} <= 0, cannot size a fixed-$"
+                    + "{} order, nothing to place", symbol, entryPrice, OrderConstants.FIXED_ORDER_VALUE_USD);
+            return Optional.empty();
+        }
+        // Every order is sized to exactly FIXED_ORDER_VALUE_USD notional, independent of
+        // RiskEngine's positionSize() - see OrderConstants.FIXED_ORDER_VALUE_USD.
+        double fixedBaseSize = OrderConstants.FIXED_ORDER_VALUE_USD / entryPrice;
+
         OrderRequest orderRequest = OrderRequest.builder()
 				.productId(symbol)
 				.side(side)
 				.orderType("LIMIT")
-				.baseSize(decision.positionSize())
+				.baseSize(fixedBaseSize)
 				.limitPrice(decision.signal().entry())
 				//.stopLoss(decision.signal().stop())
 				//.takeProfit(decision.signal().target())
@@ -115,7 +124,7 @@ public class OrderService {
                 .symbol(symbol)
                 .side(side)
                 .orderType(OrderConstants.ORDER_TYPE_MARKET)
-                .baseSize(decision.positionSize())
+                .baseSize(fixedBaseSize)
                 .entryPrice(decision.signal().entry())
                 .stopPrice(decision.signal().stop())
                 .targetPrice(decision.signal().target())
@@ -227,7 +236,7 @@ public class OrderService {
                 .symbol(orderRequest.getProductId())
                 .side(orderRequest.getSide())
                 .orderType(OrderConstants.ORDER_TYPE_MARKET)
-                .baseSize(decision.positionSize())
+                .baseSize(orderRequest.getBaseSize())
                 .entryPrice(decision.signal().entry())
                 .stopPrice(decision.signal().stop())
                 .targetPrice(decision.signal().target())
@@ -291,10 +300,15 @@ public class OrderService {
 
 		if (ORDER_TYPE_MARKET.equals(orderType)) {
 			MarketIoc.Builder marketBuilder = new MarketIoc.Builder();
-			if (request.getBaseSize() != null && request.getBaseSize() > 0) {
-				marketBuilder.baseSize(toPlainString(request.getBaseSize(), 3));
+			if (SIDE_BUY.equalsIgnoreCase(request.getSide())) {
+				// quoteSize spends an exact dollar amount - the only way to guarantee $11
+				// notional precisely for a market BUY (baseSize would drift with fill price).
+				marketBuilder.quoteSize(toPlainString(OrderConstants.FIXED_ORDER_VALUE_USD, 2));
 			} else {
-				marketBuilder.quoteSize(toPlainString(request.getQuoteSize(),3));
+				// Market SELL has no quoteSize equivalent (you sell units, not a dollar
+				// amount); request.getBaseSize() is already FIXED_ORDER_VALUE_USD / entry
+				// price from execute(), the closest achievable approximation of $11.
+				marketBuilder.baseSize(toPlainString(request.getBaseSize(), 3));
 			}
 			return new OrderConfiguration.Builder()
 					.marketMarketIoc(marketBuilder.build())
@@ -321,17 +335,11 @@ public class OrderService {
 				}
 			} else {
 				limitPrice = request.getLimitPrice() - (request.getLimitPrice() * 0.001);
-				// Adjust qty i.e baseSize to MAX_USD_PER_ORDER if order value exceeds max allowed per order.
-				double orderValue = request.getBaseSize() * request.getLimitPrice();
-				// Always keep order value as 50$.
-				baseSize = 50.00/(request.getBaseSize()!=null?request.getBaseSize():1.0);
-			
-				if (baseSize > MAX_USD_PER_ORDER) {
-					double adjustedBaseSize = Math.floor(MAX_USD_PER_ORDER / request.getLimitPrice() * 1e8) / 1e8; // avoid floating precision
-					log.info("Adjusting buy order quantity from {} to {} for product: {} to enforce max order value of ${}.",
-							request.getBaseSize(), adjustedBaseSize, request.getProductId(), MAX_USD_PER_ORDER);
-					baseSize = adjustedBaseSize;
-				}
+				// request.getBaseSize() was already sized to FIXED_ORDER_VALUE_USD / entry price
+				// (see execute()); use it as-is so every order's notional stays exactly $11 -
+				// no recomputation here, since that previously replaced a correct quantity with
+				// a nonsense one (FIXED_ORDER_VALUE_USD / baseSize instead of / price).
+				baseSize = request.getBaseSize();
 			}
 			LimitGtc limitGtc = new LimitGtc.Builder()
 					.baseSize(toPlainString(baseSize, 3))
@@ -342,70 +350,6 @@ public class OrderService {
 					.limitLimitGtc(limitGtc)
 					.build(); 
 		}
-    }
-
-    /**
-     * Builds a trigger-bracket order when the order carries real stop/target levels
-     * (SignalResult.stop()/target(), set on Order by execute() - see its javadoc), so the
-     * live order enters with its stop-loss and take-profit already attached instead of
-     * leaving the position unprotected until a separate exit order is placed. limitPrice
-     * is the take-profit exit (targetPrice) and stopTriggerPrice is the stop-loss trigger
-     * (stopPrice) - Coinbase infers exit direction from the order's own side, so a BUY
-     * order's stopTriggerPrice must sit below entry and limitPrice above it (and the
-     * reverse for SELL); sanityCheckBracket() rejects a bracket that doesn't satisfy that
-     * before it's ever sent, since a swapped/nonsensical bracket would do the opposite of
-     * "minimize losses."
-     *
-     * Falls back to a plain MARKET IOC order (no bracket) when stop/target aren't both
-     * available and sane - e.g. placeOrder()'s manual path, which doesn't carry strategy
-     * levels - rather than sending Coinbase a fabricated or malformed bracket.
-     */
-    private OrderConfiguration buildOrderConfiguration_claude(Order order) {
-        Double stop = order.getStopPrice();
-        Double target = order.getTargetPrice();
-
-//        if (stop == null || target == null || stop <= 0 || target <= 0 || !sanityCheckBracket(order)) {
-            log.info("orderService symbol={} side={} no usable stop/target levels, placing a plain MARKET order",
-                    order.getSymbol(), order.getSide());
-            return new OrderConfiguration.Builder()
-                    .marketMarketIoc(new MarketIoc.Builder()
-                            .baseSize(toPlainString(order.getBaseSize(),3))
-                            .build())
-                    .build();
-//        }
-
-//        log.info("orderService symbol={} side={} bracket stopTriggerPrice={} limitPrice={} (minimizing loss / locking gain)",
-//                order.getSymbol(), order.getSide(), toPlainString(stop), toPlainString(target));
-//        return new OrderConfiguration.Builder()
-//                .triggerBracketGtc(new TriggerGtc.Builder()
-//                        .baseSize(toPlainString(order.getBaseSize()))
-//                        .limitPrice(toPlainString(target))
-//                        .stopTriggerPrice(toPlainString(stop))
-//                        .build())
-//                .build();
-    }
-
-    /**
-     * A BUY's stop-loss must sit below its take-profit (stop below entry limits the
-     * downside; target above entry locks in the upside) - and the reverse for SELL. If
-     * entryPrice is available, also requires stop/target to sit on the correct side of it.
-     * Guards against exactly the kind of swapped/misordered levels that would turn a
-     * "minimize losses" bracket into the opposite.
-     */
-    private boolean sanityCheckBracket(Order order) {
-        double stop = order.getStopPrice();
-        double target = order.getTargetPrice();
-        Double entry = order.getEntryPrice();
-
-        boolean isBuy = OrderConstants.SIDE_BUY.equalsIgnoreCase(order.getSide());
-        boolean orderedCorrectly = isBuy ? stop < target : stop > target;
-        if (!orderedCorrectly) {
-            return false;
-        }
-        if (entry == null || entry <= 0) {
-            return true;
-        }
-        return isBuy ? (stop < entry && target > entry) : (stop > entry && target < entry);
     }
 
     /**
@@ -475,123 +419,4 @@ public class OrderService {
 		result.put(SIDE_SELL, sell);
 		return result;
 	}
-    
-//  private Order placeLive(Order order, String userId) {
-//  final OrdersService ordersService;
-//
-//  try {
-//      ordersService = resolveOrdersService(userId);
-//  } catch (Exception e) {
-//      return fail(
-//              order,
-//              "missing order credentials",
-//              "no Coinbase client available for user " + userId + ": " + e.getMessage()
-//      );
-//  }
-//
-//  try {
-//      BuiltOrderConfigurations configurations =
-//              OrderHelper.buildOrderConfigurations(order, orderRepository);
-//
-//      CreateOrderRequest.Builder requestBuilder = new CreateOrderRequest.Builder()
-//              .productId(order.getSymbol())
-//              .side(order.getSide())
-//              .clientOrderId(order.getClientOrderId())
-//              .orderConfiguration(configurations.primary())
-//              .retailPortfolioId(coinbaseProperties.portfolioId());
-//
-//      if (configurations.attached() != null) {
-//          requestBuilder.attachedOrderConfiguration(configurations.attached());
-//      }
-//
-//      /*
-//       * Set these only for derivative products when applicable.
-//       *
-//       * requestBuilder
-//       *     .leverage(order.getLeverage())
-//       *     .marginType(order.getMarginType());
-//       */
-//
-//      CreateOrderRequest request = requestBuilder.build();
-//
-//      log.info(
-//              "Submitting LIVE order userId={} symbol={} side={} type={} baseSize={} quoteSize={} " +
-//                      "limitPrice={} takeProfit={} stopLoss={} hasAttachedBracket={}",
-//              userId,
-//              order.getSymbol(),
-//              order.getSide(),
-//              order.getOrderType(),
-//              order.getBaseSize(),
-//              order.getQuoteSize(),
-//              order.getLimitPrice(),
-//              order.getTakeProfit(),
-//              order.getStopLoss(),
-//              configurations.attached() != null
-//      );
-//
-//      CreateOrderResponse response = ordersService.createOrder(request);
-//
-//      if (!response.isSuccess()) {
-//          return fail(
-//                  order,
-//                  "live order rejected by Coinbase",
-//                  response.getFailureReason()
-//          );
-//      }
-//
-//      order.setStatus(OrderStatus.PLACED);
-//      order.setCoinbaseOrderId(response.getOrderId());
-//      Order savedOrder = orderRepository.save(order);
-//
-//      OrderPlacedEvent event = new OrderPlacedEvent();
-//      event.symbol = savedOrder.getSymbol();
-//      event.orderId = savedOrder.getId();
-//      event.coinbaseOrderId = savedOrder.getCoinbaseOrderId();
-//      event.side = savedOrder.getSide();
-//      event.baseSize = savedOrder.getBaseSize();
-//
-//      eventPublisher.publish(event);
-//
-//      log.info(
-//              "LIVE order placed userId={} symbol={} side={} baseSize={} coinbaseOrderId={}",
-//              userId,
-//              savedOrder.getSymbol(),
-//              savedOrder.getSide(),
-//              savedOrder.getBaseSize(),
-//              savedOrder.getCoinbaseOrderId()
-//      );
-//
-//      return savedOrder;
-//
-//  } catch (CoinbaseAdvancedException e) {
-//      log.error(
-//              "Coinbase rejected LIVE order userId={} symbol={} side={}",
-//              userId,
-//              order.getSymbol(),
-//              order.getSide(),
-//              e
-//      );
-//
-//      return fail(
-//              order,
-//              "live order submission failed (Coinbase API error)",
-//              e.getMessage()
-//      );
-//
-//  } catch (Exception e) {
-//      log.error(
-//              "Unexpected LIVE order failure userId={} symbol={} side={}",
-//              userId,
-//              order.getSymbol(),
-//              order.getSide(),
-//              e
-//      );
-//
-//      return fail(
-//              order,
-//              "live order submission threw an unexpected exception",
-//              e.getMessage()
-//      );
-//  }
-//}
 }
