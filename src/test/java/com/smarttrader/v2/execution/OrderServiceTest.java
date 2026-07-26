@@ -21,7 +21,10 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coinbase.advanced.client.CoinbaseAdvancedClient;
 import com.coinbase.advanced.factory.CoinbaseAdvancedServiceFactory;
+import com.coinbase.advanced.model.orders.CreateOrderRequest;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
+import com.coinbase.advanced.model.orders.OrderConfiguration;
+import com.coinbase.advanced.model.orders.TriggerGtc;
 import com.coinbase.advanced.orders.OrdersService;
 import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
@@ -78,6 +81,11 @@ class OrderServiceTest {
         factory.when(() -> CoinbaseAdvancedServiceFactory.createOrdersService(coinbaseAdvancedClient))
                 .thenReturn(ordersService);
         return factory;
+    }
+
+    /** CreateOrderRequest exposes no public getter for orderConfiguration; read the field. */
+    private OrderConfiguration orderConfigurationOf(CreateOrderRequest request) {
+        return (OrderConfiguration) ReflectionTestUtils.getField(request, "orderConfiguration");
     }
 
     private TradeDecision approvedLong() {
@@ -148,6 +156,96 @@ class OrderServiceTest {
         ArgumentCaptor<TradingEvent> captor = ArgumentCaptor.forClass(TradingEvent.class);
         verify(eventPublisher, times(1)).publish(captor.capture());
         assertThat(captor.getValue()).isInstanceOf(OrderPlacedEvent.class);
+    }
+
+    @Test
+    void bullish_liveBuyOrderWithStopAndTargetPlacesATriggerBracketNotAPlainMarketOrder() throws Exception {
+        OrderService service = service(true);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-1").build();
+        ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+        when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
+
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            service.execute(approvedLong(), "BTC-USD", AnalysisContext.builder().build());
+        }
+
+        OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
+        assertThat(configuration.getMarketMarketIoc()).isNull();
+        TriggerGtc bracket = configuration.getTriggerBracketGtc();
+        assertThat(bracket).isNotNull();
+        // approvedLong(): entry=100, stop=95, target=110 -> BUY bracket must stop below entry, limit above it.
+        assertThat(bracket.getStopTriggerPrice()).isEqualTo("95.00");
+        assertThat(bracket.getLimitPrice()).isEqualTo("110.00");
+        assertThat(bracket.getBaseSize()).isEqualTo("1.50");
+    }
+
+    @Test
+    void bearish_liveSellOrderWithStopAndTargetOrdersBracketForTheShortDirection() throws Exception {
+        OrderService service = service(true);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-2").build();
+        ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+        when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
+
+        SignalResult shortSignal = SignalResult.builder()
+                .valid(true).strategyName("ShortSideStrategy").direction(TradeDirection.SHORT)
+                .entry(100.0).stop(105.0).target(90.0).riskReward(2.0).build();
+        TradeDecision shortDecision = TradeDecision.builder().approved(true).regime(MarketRegime.PANIC)
+                .signal(shortSignal).positionSize(2.0).reason("approved").build();
+
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            service.execute(shortDecision, "BTC-USD", AnalysisContext.builder().build());
+        }
+
+        TriggerGtc bracket = orderConfigurationOf(requestCaptor.getValue()).getTriggerBracketGtc();
+        assertThat(bracket).isNotNull();
+        // SELL bracket must stop above entry, limit below it.
+        assertThat(bracket.getStopTriggerPrice()).isEqualTo("105.00");
+        assertThat(bracket.getLimitPrice()).isEqualTo("90.00");
+    }
+
+    @Test
+    void edgeCase_liveOrderWithoutUsableStopTargetFallsBackToPlainMarketOrder() throws Exception {
+        OrderService service = service(true);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(orderRepository.findBySymbolOrderByCreatedAtDesc("BTC-USD")).thenReturn(List.of());
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-3").build();
+        ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+        when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
+
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            service.placeOrder("ADMIN", manualOrder("BUY", 1.0));
+        }
+
+        OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
+        assertThat(configuration.getTriggerBracketGtc()).isNull();
+        assertThat(configuration.getMarketMarketIoc()).isNotNull();
+        assertThat(configuration.getMarketMarketIoc().getBaseSize()).isEqualTo("1.00");
+    }
+
+    @Test
+    void edgeCase_liveOrderWithSwappedStopAndTargetFallsBackToPlainMarketOrder() throws Exception {
+        OrderService service = service(true);
+        when(orderRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        CreateOrderResponse response = new CreateOrderResponse.Builder().success(true).orderId("cb-4").build();
+        ArgumentCaptor<CreateOrderRequest> requestCaptor = ArgumentCaptor.forClass(CreateOrderRequest.class);
+        when(ordersService.createOrder(requestCaptor.capture())).thenReturn(response);
+
+        // A BUY with stop ABOVE target is nonsensical (would maximize loss, not minimize it).
+        SignalResult brokenSignal = SignalResult.builder()
+                .valid(true).strategyName("PullbackStrategy").direction(TradeDirection.LONG)
+                .entry(100.0).stop(110.0).target(95.0).riskReward(2.0).build();
+        TradeDecision brokenDecision = TradeDecision.builder().approved(true).regime(MarketRegime.PULLBACK)
+                .signal(brokenSignal).positionSize(1.0).reason("approved").build();
+
+        try (MockedStatic<CoinbaseAdvancedServiceFactory> ignored = stubOrdersServiceResolution("ADMIN")) {
+            service.execute(brokenDecision, "BTC-USD", AnalysisContext.builder().build());
+        }
+
+        OrderConfiguration configuration = orderConfigurationOf(requestCaptor.getValue());
+        assertThat(configuration.getTriggerBracketGtc()).isNull();
+        assertThat(configuration.getMarketMarketIoc()).isNotNull();
     }
 
     @Test

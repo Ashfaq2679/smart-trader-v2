@@ -36,6 +36,15 @@ public class Order {
     /** Base-currency quantity, taken directly from TradeDecision.positionSize(). */
     private double baseSize;
 
+    /** Strategy's intended entry price (SignalResult.entry()), null for manually-built orders. */
+    private Double entryPrice;
+
+    /** Strategy's stop-loss price (SignalResult.stop()) - drives the bracket's stopTriggerPrice. */
+    private Double stopPrice;
+
+    /** Strategy's take-profit price (SignalResult.target()) - drives the bracket's limitPrice. */
+    private Double targetPrice;
+
     private String clientOrderId;
 
     private String coinbaseOrderId;

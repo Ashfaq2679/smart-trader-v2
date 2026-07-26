@@ -1,6 +1,7 @@
 package com.smarttrader.v2.execution;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Map;
@@ -19,6 +20,7 @@ import com.coinbase.advanced.model.orders.CreateOrderRequest;
 import com.coinbase.advanced.model.orders.CreateOrderResponse;
 import com.coinbase.advanced.model.orders.MarketIoc;
 import com.coinbase.advanced.model.orders.OrderConfiguration;
+import com.coinbase.advanced.model.orders.TriggerGtc;
 import com.coinbase.advanced.orders.OrdersService;
 import com.smarttrader.v2.client.ClientService;
 import com.smarttrader.v2.client.CoinbaseProperties;
@@ -93,6 +95,9 @@ public class OrderService {
                 .side(side)
                 .orderType(OrderConstants.ORDER_TYPE_MARKET)
                 .baseSize(decision.positionSize())
+                .entryPrice(decision.signal().entry())
+                .stopPrice(decision.signal().stop())
+                .targetPrice(decision.signal().target())
                 .clientOrderId(UUID.randomUUID().toString())
                 .strategyName(decision.signal().strategyName())
                 .regime(decision.regime())
@@ -208,11 +213,7 @@ public class OrderService {
                     .productId(order.getSymbol())
                     .side(order.getSide())
                     .clientOrderId(order.getClientOrderId())
-                    .orderConfiguration(new OrderConfiguration.Builder()
-                            .marketMarketIoc(new MarketIoc.Builder()
-                                    .baseSize(toPlainString(order.getBaseSize()))
-                                    .build())
-                            .build())
+                    .orderConfiguration(buildOrderConfiguration(order))
                     .retailPortfolioId(coinbaseProperties.portfolioId())
                     .build();
 
@@ -242,6 +243,70 @@ public class OrderService {
         } catch (Exception e) {
             return fail(order, "live order submission threw an unexpected exception", e.getMessage());
         }
+    }
+
+    /**
+     * Builds a trigger-bracket order when the order carries real stop/target levels
+     * (SignalResult.stop()/target(), set on Order by execute() - see its javadoc), so the
+     * live order enters with its stop-loss and take-profit already attached instead of
+     * leaving the position unprotected until a separate exit order is placed. limitPrice
+     * is the take-profit exit (targetPrice) and stopTriggerPrice is the stop-loss trigger
+     * (stopPrice) - Coinbase infers exit direction from the order's own side, so a BUY
+     * order's stopTriggerPrice must sit below entry and limitPrice above it (and the
+     * reverse for SELL); sanityCheckBracket() rejects a bracket that doesn't satisfy that
+     * before it's ever sent, since a swapped/nonsensical bracket would do the opposite of
+     * "minimize losses."
+     *
+     * Falls back to a plain MARKET IOC order (no bracket) when stop/target aren't both
+     * available and sane - e.g. placeOrder()'s manual path, which doesn't carry strategy
+     * levels - rather than sending Coinbase a fabricated or malformed bracket.
+     */
+    private OrderConfiguration buildOrderConfiguration(Order order) {
+        Double stop = order.getStopPrice();
+        Double target = order.getTargetPrice();
+
+        if (stop == null || target == null || stop <= 0 || target <= 0 || !sanityCheckBracket(order)) {
+            log.info("orderService symbol={} side={} no usable stop/target levels, placing a plain MARKET order",
+                    order.getSymbol(), order.getSide());
+            return new OrderConfiguration.Builder()
+                    .marketMarketIoc(new MarketIoc.Builder()
+                            .baseSize(toPlainString(order.getBaseSize()))
+                            .build())
+                    .build();
+        }
+
+        log.info("orderService symbol={} side={} bracket stopTriggerPrice={} limitPrice={} (minimizing loss / locking gain)",
+                order.getSymbol(), order.getSide(), toPlainString(stop), toPlainString(target));
+        return new OrderConfiguration.Builder()
+                .triggerBracketGtc(new TriggerGtc.Builder()
+                        .baseSize(toPlainString(order.getBaseSize()))
+                        .limitPrice(toPlainString(target))
+                        .stopTriggerPrice(toPlainString(stop))
+                        .build())
+                .build();
+    }
+
+    /**
+     * A BUY's stop-loss must sit below its take-profit (stop below entry limits the
+     * downside; target above entry locks in the upside) - and the reverse for SELL. If
+     * entryPrice is available, also requires stop/target to sit on the correct side of it.
+     * Guards against exactly the kind of swapped/misordered levels that would turn a
+     * "minimize losses" bracket into the opposite.
+     */
+    private boolean sanityCheckBracket(Order order) {
+        double stop = order.getStopPrice();
+        double target = order.getTargetPrice();
+        Double entry = order.getEntryPrice();
+
+        boolean isBuy = OrderConstants.SIDE_BUY.equalsIgnoreCase(order.getSide());
+        boolean orderedCorrectly = isBuy ? stop < target : stop > target;
+        if (!orderedCorrectly) {
+            return false;
+        }
+        if (entry == null || entry <= 0) {
+            return true;
+        }
+        return isBuy ? (stop < entry && target > entry) : (stop > entry && target < entry);
     }
 
     /**
@@ -290,6 +355,6 @@ public class OrderService {
     }
 
     private String toPlainString(double value) {
-        return BigDecimal.valueOf(value).setScale(2).stripTrailingZeros().toPlainString();
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).toPlainString();
     }
 }
