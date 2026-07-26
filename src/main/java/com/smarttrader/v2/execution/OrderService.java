@@ -290,6 +290,6 @@ public class OrderService {
     }
 
     private String toPlainString(double value) {
-        return BigDecimal.valueOf(value).stripTrailingZeros().toPlainString();
+        return BigDecimal.valueOf(value).setScale(2).stripTrailingZeros().toPlainString();
     }
 }
