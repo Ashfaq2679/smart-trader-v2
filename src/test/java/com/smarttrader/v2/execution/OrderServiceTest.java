@@ -297,4 +297,57 @@ class OrderServiceTest {
         assertThat(result.get().getFailureReason()).isEqualTo("network timeout");
         verify(eventPublisher, times(2)).publish(any());
     }
+
+    /**
+     * buildOrderConfiguration()'s MARKET branch isn't reachable via execute() today
+     * (orderType is hardcoded "LIMIT" there), but it's still real code - exercised
+     * directly here via reflection since it's private.
+     */
+    @Test
+    void bullish_marketSellSizesBaseSizeFromCurrentPriceToHitElevenDollars() {
+        OrderService service = service(false);
+        com.smarttrader.v2.model.OrderRequest request = com.smarttrader.v2.model.OrderRequest.builder()
+                .productId("BTC-USD")
+                .side("SELL")
+                .orderType("MARKET")
+                .baseSize(0.05) // stale value sized off a different (signal) price
+                .entryPriceNum(200.0) // current price at request time
+                .build();
+
+        OrderConfiguration config = (OrderConfiguration) ReflectionTestUtils.invokeMethod(service, "buildOrderConfiguration", request);
+
+        assertThat(config.getMarketMarketIoc().getBaseSize()).isEqualTo("0.055");
+    }
+
+    @Test
+    void edgeCase_marketSellFallsBackToLimitPriceWhenCurrentPriceIsMissing() {
+        OrderService service = service(false);
+        com.smarttrader.v2.model.OrderRequest request = com.smarttrader.v2.model.OrderRequest.builder()
+                .productId("BTC-USD")
+                .side("SELL")
+                .orderType("MARKET")
+                .baseSize(0.05)
+                .limitPrice(110.0)
+                .build();
+
+        OrderConfiguration config = (OrderConfiguration) ReflectionTestUtils.invokeMethod(service, "buildOrderConfiguration", request);
+
+        assertThat(config.getMarketMarketIoc().getBaseSize()).isEqualTo("0.100");
+    }
+
+    @Test
+    void bullish_marketBuySizesByExactQuoteAmount() {
+        OrderService service = service(false);
+        com.smarttrader.v2.model.OrderRequest request = com.smarttrader.v2.model.OrderRequest.builder()
+                .productId("BTC-USD")
+                .side("BUY")
+                .orderType("MARKET")
+                .baseSize(0.05)
+                .entryPriceNum(200.0)
+                .build();
+
+        OrderConfiguration config = (OrderConfiguration) ReflectionTestUtils.invokeMethod(service, "buildOrderConfiguration", request);
+
+        assertThat(config.getMarketMarketIoc().getQuoteSize()).isEqualTo("11.00");
+    }
 }

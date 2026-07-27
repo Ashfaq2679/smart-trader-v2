@@ -117,7 +117,10 @@ public class OrderService {
 				.limitPrice(decision.signal().entry())
 				//.stopLoss(decision.signal().stop())
 				//.takeProfit(decision.signal().target())
-				.entryPriceNum(decision.signal().entry())
+				// Current market price, not the signal's entry: used by
+				// buildOrderConfiguration() to re-derive baseSize for MARKET SELL orders
+				// so notional stays as close to FIXED_ORDER_VALUE_USD as the live price allows.
+				.entryPriceNum(ctx.price())
 				.build();
 
         Order order = Order.builder()
@@ -306,9 +309,16 @@ public class OrderService {
 				marketBuilder.quoteSize(toPlainString(OrderConstants.FIXED_ORDER_VALUE_USD, 2));
 			} else {
 				// Market SELL has no quoteSize equivalent (you sell units, not a dollar
-				// amount); request.getBaseSize() is already FIXED_ORDER_VALUE_USD / entry
-				// price from execute(), the closest achievable approximation of $11.
-				marketBuilder.baseSize(toPlainString(request.getBaseSize(), 3));
+				// amount), so baseSize must be recomputed here against the current price
+				// (entryPriceNum, set from ctx.price() in execute()) rather than trusting
+				// request.getBaseSize() as-is - that value was sized off the signal's own
+				// entry price, which can drift from the price actually in effect when the
+				// order is submitted moments later, pulling notional away from $11.
+				double currentPrice = request.getEntryPriceNum() != null && request.getEntryPriceNum() > 0
+						? request.getEntryPriceNum()
+						: request.getLimitPrice();
+				double adjustedBaseSize = OrderConstants.FIXED_ORDER_VALUE_USD / currentPrice;
+				marketBuilder.baseSize(toPlainString(adjustedBaseSize, 3));
 			}
 			return new OrderConfiguration.Builder()
 					.marketMarketIoc(marketBuilder.build())
