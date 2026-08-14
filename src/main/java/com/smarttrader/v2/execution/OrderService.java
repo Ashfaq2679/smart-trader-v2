@@ -349,7 +349,11 @@ public class OrderService {
 				// (see execute()); use it as-is so every order's notional stays exactly $11 -
 				// no recomputation here, since that previously replaced a correct quantity with
 				// a nonsense one (FIXED_ORDER_VALUE_USD / baseSize instead of / price).
-				baseSize = request.getBaseSize();
+				double currentPrice = request.getEntryPriceNum() != null && request.getEntryPriceNum() > 0
+						? request.getEntryPriceNum()
+						: request.getLimitPrice();
+				baseSize = OrderConstants.FIXED_ORDER_VALUE_USD / currentPrice;
+			
 			}
 			LimitGtc limitGtc = new LimitGtc.Builder()
 					.baseSize(toPlainString(baseSize, 3))
