@@ -180,4 +180,72 @@ class MarketRegimeDetectorTest {
 
         assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.PULLBACK);
     }
+
+    // --- v2.5 regimes (Phase 2.7) ---
+
+    @Test
+    void detectsSqueezeLongOnCrowdedLongFundingAndFastOiGrowth() {
+        AnalysisContext ctx = base().fundingPercentile30d(92).oiChange24h(0.20).build();
+
+        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.SQUEEZE_LONG);
+    }
+
+    @Test
+    void detectsSqueezeShortOnCrowdedShortFundingAndFastOiGrowth() {
+        AnalysisContext ctx = base().fundingPercentile30d(5).oiChange24h(0.20).build();
+
+        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.SQUEEZE_SHORT);
+    }
+
+    @Test
+    void crowdedFundingWithoutOiGrowthIsNotASqueeze() {
+        AnalysisContext ctx = base().fundingPercentile30d(95).oiChange24h(0.02).build();
+
+        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.SQUEEZE_LONG);
+    }
+
+    @Test
+    void detectsNewsShockWhenCascadeIsActive() {
+        AnalysisContext ctx = base().cascadeActive(true).build();
+
+        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.NEWS_SHOCK);
+    }
+
+    @Test
+    void chopNeverFiresWithoutRealSpreadData() {
+        AnalysisContext ctx = base().build();
+
+        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.CHOP);
+    }
+
+    @Test
+    void detectsRangeWhenContainedInABoundedBandWithWeakTrend() {
+        AnalysisContext ctx = base()
+                .price(100.0).nearestSupport(90.0).nearestResistance(110.0).atr(3.0)
+                .trendDirection(TrendDirection.SIDEWAYS).trendStrength(0.1)
+                .recentBreakout(false).atrSpike(false)
+                .build();
+
+        assertThat(detector.detect(ctx)).isEqualTo(MarketRegime.RANGE);
+    }
+
+    @Test
+    void rangeDoesNotFireWhenSupportResistanceBandIsImplausiblyWide() {
+        AnalysisContext ctx = base()
+                .price(100.0).nearestSupport(10.0).nearestResistance(200.0).atr(2.0)
+                .trendDirection(TrendDirection.SIDEWAYS).trendStrength(0.1)
+                .build();
+
+        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.RANGE);
+    }
+
+    @Test
+    void rangeDoesNotFireWhilePriceIsMidBreakout() {
+        AnalysisContext ctx = base()
+                .price(112.0).nearestSupport(90.0).nearestResistance(110.0).atr(3.0)
+                .trendDirection(TrendDirection.SIDEWAYS).trendStrength(0.1)
+                .build();
+
+        assertThat(detector.detect(ctx)).isNotEqualTo(MarketRegime.RANGE);
+    }
 }

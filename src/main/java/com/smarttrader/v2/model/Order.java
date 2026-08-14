@@ -1,0 +1,74 @@
+package com.smarttrader.v2.model;
+
+import java.time.LocalDateTime;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+import lombok.Builder;
+import lombok.Data;
+
+/**
+ * A market order OrderService intended (dry-run) or placed (live), per the rebuilt
+ * execution layer. Every TradeEngine-approved decision produces exactly one Order,
+ * whether or not it actually reached Coinbase - dryRun/status distinguish "logged only"
+ * from "really sent," so this collection is a complete record of every decision the
+ * system acted (or tried to act) on.
+ */
+@Data
+@Builder
+@Document("orders")
+public class Order {
+
+    @Id
+    private String id;
+
+    @Indexed
+    private String symbol;
+
+    /** "BUY" or "SELL" (Coinbase's order side vocabulary, not TradeDirection). */
+    private String side;
+
+    /** Always "MARKET" today; kept as a field for when LIMIT support is added. */
+    private String orderType;
+
+    /** Base-currency quantity, taken directly from TradeDecision.positionSize(). */
+    private double baseSize;
+
+    /** Strategy's intended entry price (SignalResult.entry()), null for manually-built orders. */
+    private Double entryPrice;
+
+    /** Strategy's stop-loss price (SignalResult.stop()) - drives the bracket's stopTriggerPrice. */
+    private Double stopPrice;
+
+    /** Strategy's take-profit price (SignalResult.target()) - drives the bracket's limitPrice. */
+    private Double targetPrice;
+
+    private String clientOrderId;
+
+    private String coinbaseOrderId;
+
+    private OrderStatus status;
+
+    private boolean dryRun;
+
+    private String strategyName;
+
+    private MarketRegime regime;
+
+    private Double filledSize;
+
+    private Double averageFilledPrice;
+
+    private String failureReason;
+
+    private long createdAtNs;
+    
+    private Double qty;
+
+    @Indexed
+    private LocalDateTime createdAt;
+    
+    private AnalysisContext analysisContext;
+}
