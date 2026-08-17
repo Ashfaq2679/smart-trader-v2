@@ -10,8 +10,9 @@ import java.util.Optional;
 
 /**
  * Maps a detected MarketRegime to the TradingStrategy that handles it.
- * PANIC and DISTRIBUTION have no corresponding strategy: per spec, no trade
- * is taken in those regimes.
+ * PANIC, CHOP, and DISTRIBUTION have no corresponding strategy: PANIC and
+ * DISTRIBUTION per spec (no trade is taken in those regimes), CHOP because
+ * the Playbook Matrix itself lists no strategy for it (see playbookByRegime).
  *
  * selectStrategies(), per V2_5_IMPLEMENTATION_PLAN_INCREMENTAL.md Phase 2.6, is additive:
  * it returns the primary + secondary strategy pair from the section 2 Playbook Matrix
@@ -44,6 +45,13 @@ public class StrategySelector {
         map.put(MarketRegime.PULLBACK, pullbackStrategy);
         map.put(MarketRegime.BREAKOUT, breakoutStrategy);
         map.put(MarketRegime.CONTINUATION, continuationStrategy);
+        // Per the Playbook Matrix (see selectStrategies()/playbookByRegime below), these
+        // regimes have a real primary strategy but were previously missing from the live
+        // select() path, silently skipping evaluation for genuine moves in these regimes.
+        map.put(MarketRegime.RANGE, rangeHarvesterStrategy);
+        map.put(MarketRegime.SQUEEZE_LONG, sweepReclaimStrategy);
+        map.put(MarketRegime.SQUEEZE_SHORT, rangeHarvesterStrategy);
+        map.put(MarketRegime.NEWS_SHOCK, cascadeReversalStrategy);
         this.strategiesByRegime = Map.copyOf(map);
 
         Map<MarketRegime, List<TradingStrategy>> playbook = new EnumMap<>(MarketRegime.class);
