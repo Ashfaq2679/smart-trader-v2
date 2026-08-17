@@ -1,6 +1,9 @@
 package com.smarttrader.v2.strategy;
 
 import com.smarttrader.v2.model.MarketRegime;
+import com.smarttrader.v2.strategy.range.RangeStructureDetector;
+import com.smarttrader.v2.strategy.range.RangeSupportResistanceConfig;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;
@@ -26,6 +29,12 @@ import java.util.Optional;
  * itself (the spec's table doesn't call them out as a primary/secondary pick for any
  * single regime); they remain registered strategies with their own applicableRegimes()
  * for future, more flexible selection logic to use.
+ *
+ * <p>Per V2_5_IMPLEMENTATION_PLAN_INCREMENTAL_WITH_RANGE_SR.md §2.3.1 lines 1037-1064,
+ * {@link RangeSupportResistanceStrategy} is added to the RANGE playbook <b>only</b> when
+ * its feature flag is enabled - otherwise the RANGE routing is byte-for-byte identical to
+ * the pre-existing {@code (rangeHarvesterStrategy, sfpReversalStrategy)} pair, keeping
+ * the "enabled=false → existing behaviour unchanged" invariant.
  */
 @Component
 public class StrategySelector {
@@ -33,6 +42,11 @@ public class StrategySelector {
     private final Map<MarketRegime, TradingStrategy> strategiesByRegime;
     private final Map<MarketRegime, List<TradingStrategy>> playbookByRegime;
 
+    /**
+     * Legacy 7-arg constructor - retained so existing wiring/tests that instantiate
+     * StrategySelector directly (e.g. StrategySelectorTest) do not need to change.
+     * Defaults RangeSupportResistance to disabled, preserving today's RANGE routing.
+     */
     public StrategySelector(PullbackStrategy pullbackStrategy,
                              BreakoutStrategy breakoutStrategy,
                              ContinuationStrategy continuationStrategy,
@@ -40,6 +54,23 @@ public class StrategySelector {
                              SFPReversalStrategy sfpReversalStrategy,
                              RangeHarvesterStrategy rangeHarvesterStrategy,
                              CascadeReversalStrategy cascadeReversalStrategy) {
+        this(pullbackStrategy, breakoutStrategy, continuationStrategy, sweepReclaimStrategy,
+                sfpReversalStrategy, rangeHarvesterStrategy, cascadeReversalStrategy,
+                new RangeSupportResistanceStrategy(new RangeStructureDetector(),
+                        RangeSupportResistanceConfig.disabled()),
+                RangeSupportResistanceConfig.disabled());
+    }
+
+    @Autowired
+    public StrategySelector(PullbackStrategy pullbackStrategy,
+                             BreakoutStrategy breakoutStrategy,
+                             ContinuationStrategy continuationStrategy,
+                             SweepReclaimStrategy sweepReclaimStrategy,
+                             SFPReversalStrategy sfpReversalStrategy,
+                             RangeHarvesterStrategy rangeHarvesterStrategy,
+                             CascadeReversalStrategy cascadeReversalStrategy,
+                             RangeSupportResistanceStrategy rangeSupportResistanceStrategy,
+                             RangeSupportResistanceConfig rangeSupportResistanceConfig) {
         Map<MarketRegime, TradingStrategy> map = new EnumMap<>(MarketRegime.class);
         map.put(MarketRegime.PULLBACK, pullbackStrategy);
         map.put(MarketRegime.BREAKOUT, breakoutStrategy);
@@ -50,7 +81,12 @@ public class StrategySelector {
         playbook.put(MarketRegime.BREAKOUT, List.of(breakoutStrategy, sweepReclaimStrategy));
         playbook.put(MarketRegime.CONTINUATION, List.of(continuationStrategy, sfpReversalStrategy));
         playbook.put(MarketRegime.PULLBACK, List.of(pullbackStrategy, rangeHarvesterStrategy));
-        playbook.put(MarketRegime.RANGE, List.of(rangeHarvesterStrategy, sfpReversalStrategy));
+
+        List<TradingStrategy> rangePlaybook = rangeSupportResistanceConfig.enabled()
+                ? List.of(rangeHarvesterStrategy, sfpReversalStrategy, rangeSupportResistanceStrategy)
+                : List.of(rangeHarvesterStrategy, sfpReversalStrategy);
+        playbook.put(MarketRegime.RANGE, rangePlaybook);
+
         playbook.put(MarketRegime.SQUEEZE_LONG, List.of(sweepReclaimStrategy));
         playbook.put(MarketRegime.SQUEEZE_SHORT, List.of(rangeHarvesterStrategy));
         playbook.put(MarketRegime.CHOP, List.of());

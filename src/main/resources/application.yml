@@ -41,6 +41,25 @@ smart-trader:
     cascade:
       bar-range-multiplier: 3
       oi-change-threshold: -0.05
+    strategies:
+      # V2_5_IMPLEMENTATION_PLAN_INCREMENTAL_WITH_RANGE_SR.md §2.3.1 (lines 776-795).
+      # Feature-flagged, default disabled: while enabled=false the RANGE playbook stays
+      # exactly (RangeHarvester, SFPReversal) - see StrategySelector.
+      range-support-resistance:
+        enabled: false
+        minimum-touches: 2
+        preferred-touches: 3
+        minimum-width-atr: 2.0
+        boundary-tolerance-atr: 0.15
+        minimum-range-quality: 70
+        minimum-entry-confidence: 70
+        minimum-risk-reward: 1.5
+        support-entry-buffer-atr: 0.15
+        resistance-entry-buffer-atr: 0.15
+        stop-buffer-atr: 0.10
+        breakout-buffer-atr: 0.10
+        emergency-break-buffer-atr: 0.25
+        maximum-trades-per-side-per-session: 2
   # TradingScheduler: polls Coinbase for candles per granularity and runs tracked-symbols
   # through the decision pipeline. Everything defaults to disabled (see
   # TradingScheduler's javadoc) - flip `enabled: true` plus whichever granularities you
